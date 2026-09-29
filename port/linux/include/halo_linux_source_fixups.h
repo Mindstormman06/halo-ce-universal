@@ -56,5 +56,7 @@ float halo_sound_class_volume(short class_index);
 void halo_overlay_pause(int paused);
 /* the mouse in the menus (source/interface/ui_widget.c) */
 #include "halo_ui_pointer.h"
+/* typing into the on-screen keyboard (source/interface/virtual_keyboard.c) */
+#include "halo_text_input.h"
 
 #endif

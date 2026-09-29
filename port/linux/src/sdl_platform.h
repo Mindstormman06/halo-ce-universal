@@ -82,5 +82,9 @@ speech, 0 to 1 (dsound_sdl.c) */
 void dsound_volumes_set(float master, float music, float effects, float dialog);
 #endif
 BOOL platform_next_keystroke(struct platform_keystroke *keystroke);
+/* while active the keyboard types into the on-screen keyboard
+(halo_text_input.h) rather than driving the controller; never on Android */
+void platform_text_input_set_active(BOOL active);
+BOOL platform_text_input_active(void);
 
 #endif

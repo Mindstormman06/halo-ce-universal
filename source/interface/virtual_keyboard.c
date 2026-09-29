@@ -1140,6 +1140,169 @@ static boolean virtual_keyboard_select(
 	return TRUE;
 }
 
+#ifdef HALO_LINUX
+/* ---------- typing (desktop builds)
+
+The real keyboard types here (port/linux/include/halo_text_input.h). The
+characters the on-screen keys can enter go in at the cursor as if picked
+there, others are refused; backspace, the arrows, enter and escape do what
+X, the triggers, start and B do on the controller. */
+
+static boolean virtual_keyboard_can_type(
+	wchar_t character)
+{
+	struct virtual_keyboard_definition *keyboard = virtual_keyboard_globals.keyboard;
+	long keycode;
+
+	if (character == L' ')
+		return TRUE;
+	for (keycode = 0; keycode < NUMBER_OF_CONFIGURABLE_VIRTUAL_KEYS && keycode < keyboard->keys.count; keycode++)
+	{
+		struct virtual_keyboard_key *key = virtual_keyboard_key_get(keyboard, keycode);
+
+		if (character == key->character ||
+			character == key->shift_character ||
+			character == key->caps_character ||
+			character == key->symbols_character ||
+			character == key->shift_caps_character ||
+			character == key->shift_symbols_character ||
+			character == key->caps_symbols_character)
+		{
+			return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
+/* the first edit replaces the text the keyboard opened with */
+static boolean virtual_keyboard_replace_buffer(
+	void)
+{
+	if (virtual_keyboard_globals.first_key_replaces_buffer == TRUE)
+	{
+		csmemset(
+			virtual_keyboard_globals.text_buffer,
+			0,
+			virtual_keyboard_globals.buffer_size);
+		virtual_keyboard_globals.cursor = virtual_keyboard_globals.text_buffer;
+		virtual_keyboard_globals.first_key_replaces_buffer = FALSE;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+static void virtual_keyboard_type_character(
+	wchar_t character)
+{
+	if (!virtual_keyboard_can_type(character))
+	{
+		ui_play_audio_feedback_sound(_ui_audio_feedback_flag_failure);
+		return;
+	}
+	virtual_keyboard_replace_buffer();
+	if (virtual_keyboard_free_space_in_text_buffer() >= 2)
+	{
+		csmemmove(
+			virtual_keyboard_globals.cursor + 1,
+			virtual_keyboard_globals.cursor,
+			virtual_keyboard_globals.buffer_size - ((byte *)virtual_keyboard_globals.cursor - (byte *)virtual_keyboard_globals.text_buffer) - sizeof(wchar_t));
+		*virtual_keyboard_globals.cursor++ = character;
+		ui_play_audio_feedback_sound(_ui_audio_feedback_forward);
+	}
+	else
+	{
+		ui_play_audio_feedback_sound(_ui_audio_feedback_flag_failure);
+	}
+
+	return;
+}
+
+static void virtual_keyboard_type_delete(
+	void)
+{
+	if (!virtual_keyboard_replace_buffer() && *virtual_keyboard_globals.cursor)
+	{
+		long remaining_size = virtual_keyboard_globals.buffer_size -
+			((byte *)virtual_keyboard_globals.cursor - (byte *)virtual_keyboard_globals.text_buffer);
+
+		csmemmove(
+			virtual_keyboard_globals.cursor,
+			virtual_keyboard_globals.cursor + 1,
+			remaining_size - sizeof(wchar_t));
+		virtual_keyboard_globals.text_buffer[virtual_keyboard_globals.buffer_size / 2 - 1] = L'\0';
+	}
+	ui_play_audio_feedback_sound(_ui_audio_feedback_cursor);
+
+	return;
+}
+
+/* what was typed since the last frame; FALSE once the keyboard closed */
+static boolean virtual_keyboard_type(
+	void)
+{
+	struct halo_text_input input;
+
+	while (virtual_keyboard_globals.active && halo_text_input_next(&input))
+	{
+		switch (input.kind)
+		{
+		case _halo_text_input_character:
+			virtual_keyboard_type_character((wchar_t)input.character);
+			break;
+
+		case _halo_text_input_backspace:
+			if (virtual_keyboard_replace_buffer())
+				ui_play_audio_feedback_sound(_ui_audio_feedback_cursor);
+			else
+				virtual_keyboard_backspace();
+			break;
+
+		case _halo_text_input_delete:
+			virtual_keyboard_type_delete();
+			break;
+
+		case _halo_text_input_left:
+		case _halo_text_input_home:
+			virtual_keyboard_globals.first_key_replaces_buffer = FALSE;
+			while (virtual_keyboard_globals.cursor > virtual_keyboard_globals.text_buffer)
+			{
+				virtual_keyboard_globals.cursor--;
+				if (input.kind == _halo_text_input_left)
+					break;
+			}
+			ui_play_audio_feedback_sound(_ui_audio_feedback_cursor);
+			break;
+
+		case _halo_text_input_right:
+		case _halo_text_input_end:
+			virtual_keyboard_globals.first_key_replaces_buffer = FALSE;
+			while (*virtual_keyboard_globals.cursor)
+			{
+				virtual_keyboard_globals.cursor++;
+				if (input.kind == _halo_text_input_right)
+					break;
+			}
+			ui_play_audio_feedback_sound(_ui_audio_feedback_cursor);
+			break;
+
+		case _halo_text_input_done:
+			virtual_keyboard_globals.row = 0;
+			virtual_keyboard_globals.column = 0;
+			virtual_keyboard_select();
+			break;
+
+		case _halo_text_input_cancel:
+			virtual_keyboard_cancel();
+			break;
+		}
+	}
+
+	return virtual_keyboard_globals.active;
+}
+#endif
+
 static void virtual_keyboard_process_internal(
 	void)
 {
@@ -1148,6 +1311,11 @@ static void virtual_keyboard_process_internal(
 	struct event_record event;
 	long action = NONE;
 	boolean handled = FALSE;
+
+#ifdef HALO_LINUX
+	if (!virtual_keyboard_type())
+		return;
+#endif
 
 	while (get_next_event(&event, NONE))
 	{

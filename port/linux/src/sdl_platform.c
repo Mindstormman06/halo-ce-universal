@@ -15,6 +15,7 @@ and the debug keyboard that the game's console reads.
 #include "port_config.h"
 #include "p2p.h"
 #include "xiso.h"
+#include "halo_text_input.h"
 #ifndef HALO_ANDROID
 #include "overlay.h"
 #endif
@@ -44,6 +45,17 @@ static pthread_mutex_t input_lock = PTHREAD_MUTEX_INITIALIZER;
 #define KEYSTROKE_QUEUE_SIZE 64
 static struct platform_keystroke keystroke_queue[KEYSTROKE_QUEUE_SIZE];
 static unsigned long keystroke_head, keystroke_count;
+
+/* typing into the on-screen keyboard (halo_text_input.h), under input_lock:
+what was typed, whether the game wants typing and whether SDL's text input
+is on */
+#define TEXT_INPUT_QUEUE_SIZE 64
+static struct halo_text_input text_input_queue[TEXT_INPUT_QUEUE_SIZE];
+static unsigned long text_input_head, text_input_count;
+static BOOL text_input_wanted, text_input_started;
+/* keys held when typing ended: they stay up for the controller until
+released, so the enter that finished does not also press A */
+static unsigned char keys_held_over[SDL_SCANCODE_COUNT];
 
 #ifndef HALO_ANDROID
 /* updater.c's: the desktop self-updater */
@@ -691,6 +703,125 @@ BOOL platform_next_keystroke(struct platform_keystroke *keystroke)
 	return result;
 }
 
+/* ---------- typing (halo_text_input.h) */
+
+void platform_text_input_set_active(BOOL active)
+{
+#ifdef HALO_ANDROID
+	(void)active;
+#else
+	text_input_wanted = active ? TRUE : FALSE;
+#endif
+}
+
+BOOL platform_text_input_active(void)
+{
+	return text_input_wanted;
+}
+
+static void queue_text_input(enum halo_text_input_kind kind, unsigned short character)
+{
+	struct halo_text_input *input;
+
+	if (text_input_count == TEXT_INPUT_QUEUE_SIZE)
+		return;
+	input = &text_input_queue[(text_input_head + text_input_count) % TEXT_INPUT_QUEUE_SIZE];
+	input->kind = (unsigned char)kind;
+	input->character = character;
+	text_input_count++;
+}
+
+/* the characters of SDL's UTF-8 text, those beyond the basic multilingual
+plane dropped */
+static void queue_text(const char *text)
+{
+	const unsigned char *next = (const unsigned char *)text;
+
+	while (*next)
+	{
+		unsigned long code_point;
+		int length, index;
+
+		if (*next < 0x80) { code_point = *next; length = 1; }
+		else if ((*next & 0xe0) == 0xc0) { code_point = *next & 0x1f; length = 2; }
+		else if ((*next & 0xf0) == 0xe0) { code_point = *next & 0x0f; length = 3; }
+		else if ((*next & 0xf8) == 0xf0) { code_point = *next & 0x07; length = 4; }
+		else { next++; continue; }
+		for (index = 1; index < length; index++)
+		{
+			if ((next[index] & 0xc0) != 0x80)
+				break;
+			code_point = (code_point << 6) | (next[index] & 0x3f);
+		}
+		next += index;
+		if (index == length && code_point >= 0x20 && code_point < 0xd800 && code_point != 0x7f)
+			queue_text_input(_halo_text_input_character, (unsigned short)code_point);
+	}
+}
+
+/* the editing keys while typing (characters come as text input) */
+static void queue_text_key(const SDL_KeyboardEvent *event)
+{
+	if (!event->down)
+		return;
+	switch (event->key)
+	{
+	case SDLK_BACKSPACE: queue_text_input(_halo_text_input_backspace, 0); break;
+	case SDLK_DELETE: queue_text_input(_halo_text_input_delete, 0); break;
+	case SDLK_LEFT: queue_text_input(_halo_text_input_left, 0); break;
+	case SDLK_RIGHT: queue_text_input(_halo_text_input_right, 0); break;
+	case SDLK_HOME: queue_text_input(_halo_text_input_home, 0); break;
+	case SDLK_END: queue_text_input(_halo_text_input_end, 0); break;
+	case SDLK_RETURN:
+	case SDLK_KP_ENTER:
+		if (!event->repeat)
+			queue_text_input(_halo_text_input_done, 0);
+		break;
+	case SDLK_ESCAPE:
+		if (!event->repeat)
+			queue_text_input(_halo_text_input_cancel, 0);
+		break;
+	default:
+		break;
+	}
+}
+
+/* turns SDL's text input on or off as the game wants, under input_lock on
+the event thread */
+static void text_input_update(void)
+{
+	if (text_input_wanted == text_input_started)
+		return;
+	if (text_input_wanted)
+	{
+		SDL_StartTextInput(platform_window);
+	}
+	else
+	{
+		SDL_StopTextInput(platform_window);
+		memcpy(keys_held_over, input_state.keys, sizeof(keys_held_over));
+		memset(keys_pressed, 0, sizeof(keys_pressed));
+	}
+	text_input_head = text_input_count = 0;
+	text_input_started = text_input_wanted;
+}
+
+int halo_text_input_next(struct halo_text_input *input)
+{
+	int result = 0;
+
+	pthread_mutex_lock(&input_lock);
+	if (text_input_count)
+	{
+		*input = text_input_queue[text_input_head];
+		text_input_head = (text_input_head + 1) % TEXT_INPUT_QUEUE_SIZE;
+		text_input_count--;
+		result = 1;
+	}
+	pthread_mutex_unlock(&input_lock);
+	return result;
+}
+
 /* ---------- internet play's invite links (p2p.c) */
 
 #ifdef HALO_ANDROID
@@ -820,6 +951,7 @@ void platform_pump_events(void)
 	updater_poll(platform_window);
 #endif
 	pthread_mutex_lock(&input_lock);
+	text_input_update();
 	while (SDL_PollEvent(&event))
 	{
 #ifndef HALO_ANDROID
@@ -849,8 +981,12 @@ void platform_pump_events(void)
 				input_state.keys[event.key.scancode] = event.key.down;
 				if (event.key.down)
 					keys_pressed[event.key.scancode] = 1;
+				else
+					keys_held_over[event.key.scancode] = 0;
 			}
 			queue_keystroke(&event.key);
+			if (text_input_started)
+				queue_text_key(&event.key);
 			/* F12 releases or recaptures the mouse */
 			if (event.key.down && !event.key.repeat && event.key.scancode == SDL_SCANCODE_F12)
 			{
@@ -926,8 +1062,13 @@ void platform_pump_events(void)
 #endif
 			input_state.mouse_wheel += event.wheel.y;
 			break;
+		case SDL_EVENT_TEXT_INPUT:
+			if (text_input_started)
+				queue_text(event.text.text);
+			break;
 		case SDL_EVENT_WINDOW_FOCUS_LOST:
 			memset(input_state.keys, 0, sizeof(input_state.keys));
+			memset(keys_held_over, 0, sizeof(keys_held_over));
 			memset(input_state.mouse_buttons, 0, sizeof(input_state.mouse_buttons));
 			input_state.focused = FALSE;
 			break;
@@ -1117,14 +1258,18 @@ void platform_input_read(struct platform_input_state *state, BOOL consume_motion
 {
 	pthread_mutex_lock(&input_lock);
 	*state = input_state;
-	if (consume_motion)
 	{
 		int scancode;
 
 		for (scancode = 0; scancode < SDL_SCANCODE_COUNT; scancode++)
 		{
-			state->keys[scancode] |= keys_pressed[scancode];
-			keys_pressed[scancode] = 0;
+			if (consume_motion)
+			{
+				state->keys[scancode] |= keys_pressed[scancode];
+				keys_pressed[scancode] = 0;
+			}
+			if (keys_held_over[scancode])
+				state->keys[scancode] = 0;
 		}
 	}
 	if (consume_motion)

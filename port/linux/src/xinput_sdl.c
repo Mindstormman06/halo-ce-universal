@@ -30,6 +30,9 @@ opens it) always reaches the keystroke queue, everything else only while
 the console is open, since the game also polls a few keys directly (escape
 returns to the main menu). While the console is open the keyboard does not
 drive the controller.
+
+Nor does it while the menus' on-screen keyboard is up (desktop builds): then
+it types into it instead (port/linux/include/halo_text_input.h).
 */
 
 #include "platform.h"
@@ -51,6 +54,8 @@ drive the controller.
 
 /* main/console.c */
 extern unsigned char console_is_active(void);
+/* interface/virtual_keyboard.c */
+extern unsigned char virtual_keyboard_active(void);
 
 /* ---------- device tables */
 
@@ -485,6 +490,7 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	memset(state, 0, sizeof(*state));
 	if (port < 0)
 		return ERROR_DEVICE_NOT_CONNECTED;
+	platform_text_input_set_active(virtual_keyboard_active());
 	platform_pump_events();
 	count = sdl_gamepads(gamepads);
 	if (port == 0)
@@ -494,7 +500,7 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 		platform_input_read(&input, TRUE);
 		mouse_poll(&input);
 		wheel_update();
-		if (!console_is_active())
+		if (!console_is_active() && !platform_text_input_active())
 			keyboard_gamepad(&input, &state->Gamepad);
 		if (count > 0)
 			sdl_gamepad_state(gamepads[0], &state->Gamepad);
@@ -557,8 +563,10 @@ DWORD WINAPI XInputDebugGetKeystroke(PXINPUT_DEBUG_KEYSTROKE keystroke)
 	{
 		BOOL key_up = (next.flags & XINPUT_DEBUG_KEYSTROKE_FLAG_KEYUP) != 0;
 
-		/* key ups always pass, so no key is left latched down */
-		if (key_up || next.virtual_key == VK_OEM_3_BACKQUOTE || console_is_active())
+		/* key ups always pass, so no key is left latched down; backquote
+		types while typing rather than opening the console */
+		if (key_up || (next.virtual_key == VK_OEM_3_BACKQUOTE && !platform_text_input_active()) ||
+			console_is_active())
 		{
 			keystroke->VirtualKey = next.virtual_key;
 			keystroke->Ascii = next.ascii;
