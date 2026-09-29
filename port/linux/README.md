@@ -200,6 +200,7 @@ the setting for one start of the game. It has priority over the file.
 | `input.mouse_sensitivity` | `1.0` | `HALO_MOUSE_SENSITIVITY` | The multiplier for the mouse aim. |
 | `input.invert_mouse` | `false` | `HALO_MOUSE_INVERT=1` sets `true` | `true`: the vertical mouse aim is inverted. |
 | `game.language` | `""` | `HALO_LANGUAGE` | The language of the menus: `ja`, `de`, `fr`, `es` or `it`. Empty: English. |
+| `game.unlock_all_levels` | `true` | `HALO_UNLOCK_ALL_LEVELS` | New profiles start with all campaign levels and difficulties open. `false`: only the first level, the rest opened by finishing the one before, as in the Xbox game. Profiles already made do not change. |
 | `paths.data` | `""` | `HALO_DATA_ROOT` | The data root. Refer to "Start the game". |
 | `paths.saves` | `""` | `HALO_SAVE_ROOT` | The save root. Refer to "Files and folders". |
 | `network.netcode` | `"distributed"` | `HALO_NETCODE` | `"distributed"`: each machine moves its own player at once, and the host makes the decisions (refer to `NETCODE.md`). `"lockstep"`: as on the Xbox. The host's setting applies: a machine that joins a game uses the netcode of the host. |

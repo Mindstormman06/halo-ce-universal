@@ -116,6 +116,10 @@ static const struct config_setting config_settings[] =
 	{ "game.language", _config_string, "\"\"", "HALO_LANGUAGE", _environment_value, _platform_all,
 		"The language the game asks the Xbox for: \"ja\", \"de\", \"fr\", \"es\" or \"it\";\n"
 		"empty for English. The game data decides what is translated." },
+	{ "game.unlock_all_levels", _config_boolean, "true", "HALO_UNLOCK_ALL_LEVELS", _environment_value, _platform_all,
+		"New profiles start with every campaign level open on every difficulty;\n"
+		"false starts them with only the first, the rest opened by finishing the\n"
+		"one before, as the released game did. Profiles already made keep theirs." },
 
 	{ "paths.data", _config_string, "\"\"", "HALO_DATA_ROOT", _environment_value, _platform_desktop,
 		"The folder holding the game data's maps folder; empty looks in the\n"
