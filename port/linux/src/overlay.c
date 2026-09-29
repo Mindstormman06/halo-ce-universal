@@ -56,6 +56,7 @@ enum overlay_item
 {
 	_item_display_mode,
 	_item_window_size,
+	_item_widescreen,
 	_item_render_scale,
 	_item_vsync,
 	_item_interpolation,
@@ -84,15 +85,17 @@ struct item_definition
 static const struct item_definition items[NUMBER_OF_ITEMS] =
 {
 	{ _tab_display, _kind_choice, "display.fullscreen", "Display mode",
-		"Fullscreen covers the display at the resolution it already has, so switching to other windows is "
-		"instant. F11 also switches." },
-	{ _tab_display, _kind_choice, "display.window_scale", "Window size",
-		"The size of the window, as a multiple of the Xbox's 640x480. The window can also be resized by its "
-		"edges." },
-	{ _tab_display, _kind_choice, "display.render_scale", "Fullscreen resolution",
-		"Native draws at the display's height. Whole multiple draws at the largest multiple of the Xbox's 480 "
-		"lines that fits, and scales the rest: for a 1080p display on which the menus show thin lines. "
-		"Original draws 480 lines." },
+		"Fullscreen takes the display for the game alone. Borderless covers it with a window without a frame, "
+		"so switching to other windows is instant. F11 switches between fullscreen and the window." },
+	{ _tab_display, _kind_choice, "display.window_height", "Window size",
+		"The size of the window, which the game draws at. The window can also be resized by its edges." },
+	{ _tab_display, _kind_toggle, "display.widescreen", "Widescreen",
+		"The picture takes the shape of the display or the window. Off keeps the Xbox's 4:3, with bars at "
+		"the sides." },
+	{ _tab_display, _kind_choice, "display.render_scale", "Resolution",
+		"Native draws at the height of the display or window. Whole multiple draws at the largest multiple of "
+		"the Xbox's 480 lines that fits, and scales the rest: for a 1080p display on which the menus show thin "
+		"lines. Original draws 480 lines." },
 	{ _tab_display, _kind_toggle, "display.vsync", "Vertical sync",
 		"Waits for the display between frames, which stops tearing." },
 	{ _tab_display, _kind_toggle, "display.interpolation", "Smooth motion",
@@ -117,7 +120,9 @@ static const struct item_definition items[NUMBER_OF_ITEMS] =
 
 static const char *const tab_names[NUMBER_OF_TABS] = { "DISPLAY", "AUDIO", "CONTROLS" };
 static const char *const render_scale_settings[] = { "native", "integer", "original" };
-static const char *const render_scale_names[] = { "Native", "Whole multiple", "Original" };
+static const char *const render_scale_names[] = { "Native", "Whole multiple", "Original (480p)" };
+/* in the order of enum platform_display_mode */
+static const char *const display_mode_names[] = { "Fullscreen", "Borderless", "Windowed" };
 #define NUMBER_OF_RENDER_SCALES ((int)(sizeof(render_scale_settings) / sizeof(render_scale_settings[0])))
 
 /* ---------- layout */
@@ -161,6 +166,9 @@ static struct
 
 	/* choices are indices, toggles 0 or 1 */
 	float values[NUMBER_OF_ITEMS];
+	/* the window heights offered (platform_video_window_heights) */
+	int window_heights[16];
+	int window_height_count;
 	/* changed, and not yet written into config.toml */
 	BOOL unsaved[NUMBER_OF_ITEMS];
 
@@ -192,14 +200,9 @@ static int choice_count(enum overlay_item item)
 	switch (item)
 	{
 	case _item_display_mode:
-		return 2;
+		return 3;
 	case _item_window_size:
-	{
-		int maximum = platform_video_maximum_window_scale();
-		int current = (int)overlay.values[item] + 1;
-
-		return current > maximum ? current : maximum;
-	}
+		return overlay.window_height_count;
 	case _item_render_scale:
 		return NUMBER_OF_RENDER_SCALES;
 	default:
@@ -212,11 +215,15 @@ static void choice_text(enum overlay_item item, int index, char *text, size_t si
 	switch (item)
 	{
 	case _item_display_mode:
-		snprintf(text, size, "%s", index == 0 ? "Fullscreen" : "Windowed");
+		snprintf(text, size, "%s", display_mode_names[index]);
 		break;
 	case _item_window_size:
-		snprintf(text, size, "%d x %d", 640 * (index + 1), 480 * (index + 1));
+	{
+		int height = overlay.window_heights[index];
+
+		snprintf(text, size, "%d x %d", platform_video_window_width(height), height);
 		break;
+	}
 	case _item_render_scale:
 		snprintf(text, size, "%s", render_scale_names[index]);
 		break;
@@ -239,16 +246,33 @@ static float clampf(float value, float minimum, float maximum)
 	return value < minimum ? minimum : value > maximum ? maximum : value;
 }
 
+/* the window heights offered, and which is the window's: the largest no
+taller than it */
+static void window_heights_load(void)
+{
+	long height = config_integer("display.window_height");
+	int index;
+
+	if (height < 240)
+		height = 480 * (config_integer("display.window_scale") < 1 ? 1 : config_integer("display.window_scale"));
+	overlay.window_height_count = platform_video_window_heights(overlay.window_heights,
+		(int)(sizeof(overlay.window_heights) / sizeof(overlay.window_heights[0])));
+	overlay.values[_item_window_size] = 0.0f;
+	for (index = 0; index < overlay.window_height_count; index++)
+	{
+		if (overlay.window_heights[index] <= height)
+			overlay.values[_item_window_size] = (float)index;
+	}
+}
+
 /* the values as they are now */
 static void overlay_load(void)
 {
 	const char *render_scale = config_string("display.render_scale");
-	int maximum = platform_video_maximum_window_scale();
 	int index;
 
-	overlay.values[_item_display_mode] = platform_video_fullscreen() ? 0.0f : 1.0f;
-	index = (int)config_integer("display.window_scale");
-	overlay.values[_item_window_size] = (float)((index < 1 ? 1 : index > maximum ? maximum : index) - 1);
+	overlay.values[_item_display_mode] = (float)platform_video_display_mode();
+	window_heights_load();
 	overlay.values[_item_render_scale] = 0.0f;
 	for (index = 0; index < NUMBER_OF_RENDER_SCALES; index++)
 	{
@@ -273,14 +297,21 @@ static void item_apply(enum overlay_item item)
 	switch (item)
 	{
 	case _item_display_mode:
-		platform_video_set_fullscreen(value == 0.0f);
-		if (value != 0.0f)
-			platform_video_set_window_scale((int)overlay.values[_item_window_size] + 1);
-		config_set_boolean(items[item].setting, value == 0.0f);
+		platform_video_set_display_mode((enum platform_display_mode)(int)value);
+		config_set_boolean("display.fullscreen", value != (float)_platform_display_windowed);
+		/* (a window keeps the fullscreen last chosen, for F11) */
+		if (value != (float)_platform_display_windowed)
+			config_set_boolean("display.exclusive", value == (float)_platform_display_exclusive);
 		break;
 	case _item_window_size:
-		platform_video_set_window_scale((int)value + 1);
-		config_set_integer(items[item].setting, (long)value + 1);
+		config_set_integer(items[item].setting, overlay.window_heights[(int)value]);
+		platform_video_set_window_height(overlay.window_heights[(int)value]);
+		break;
+	case _item_widescreen:
+		/* (d3d8_gl.c takes it up between frames; the window takes the shape) */
+		config_set_boolean(items[item].setting, value != 0.0f);
+		window_heights_load();
+		platform_video_set_window_height(overlay.window_heights[(int)overlay.values[_item_window_size]]);
 		break;
 	case _item_render_scale:
 		/* (d3d8_gl.c takes it up between frames) */
@@ -324,10 +355,12 @@ static void overlay_save(void)
 		switch (item)
 		{
 		case _item_display_mode:
-			written = config_write_boolean(items[item].setting, value == 0.0f);
+			written = config_write_boolean("display.fullscreen", value != (float)_platform_display_windowed);
+			if (value != (float)_platform_display_windowed)
+				written &= config_write_boolean("display.exclusive", value == (float)_platform_display_exclusive);
 			break;
 		case _item_window_size:
-			written = config_write_integer(items[item].setting, (long)value + 1);
+			written = config_write_integer(items[item].setting, overlay.window_heights[(int)value]);
 			break;
 		case _item_render_scale:
 			written = config_write_string(items[item].setting, render_scale_settings[(int)value]);
@@ -443,7 +476,7 @@ static void overlay_layout(struct overlay_layout *layout)
 	unit = clampf(unit, 0.6f, 2.0f);
 	layout->unit = unit;
 	layout->panel = make_box(floorf(((float)overlay.width - 760.0f * unit) / 2.0f),
-		floorf(((float)overlay.height - 560.0f * unit) / 2.0f), floorf(760.0f * unit), floorf(560.0f * unit));
+		floorf(((float)overlay.height - 600.0f * unit) / 2.0f), floorf(760.0f * unit), floorf(600.0f * unit));
 
 	x = layout->panel.x + 24.0f * unit;
 	right = layout->panel.x + layout->panel.width - 24.0f * unit;
@@ -473,7 +506,7 @@ static void overlay_layout(struct overlay_layout *layout)
 		layout->row_count++;
 	}
 
-	layout->help = make_box(layout->panel.x + 48.0f * unit, layout->panel.y + 414.0f * unit,
+	layout->help = make_box(layout->panel.x + 48.0f * unit, layout->panel.y + 460.0f * unit,
 		layout->panel.width - 96.0f * unit, 70.0f * unit);
 	layout->footer = make_box(layout->panel.x, layout->panel.y + layout->panel.height - 58.0f * unit,
 		layout->panel.width, 58.0f * unit);
@@ -1053,7 +1086,7 @@ void overlay_draw(int width, int height)
 		struct overlay_layout layout;
 
 		/* (F11 switches outside the overlay too) */
-		overlay.values[_item_display_mode] = platform_video_fullscreen() ? 0.0f : 1.0f;
+		overlay.values[_item_display_mode] = (float)platform_video_display_mode();
 		overlay_layout(&layout);
 		draw_panel(&layout);
 	}

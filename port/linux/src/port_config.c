@@ -66,16 +66,24 @@ struct config_setting
 static const struct config_setting config_settings[] =
 {
 	{ "display.fullscreen", _config_boolean, "true", "HALO_FULLSCREEN", _environment_value, _platform_desktop,
-		"Start fullscreen, drawing at the display's resolution and shape; false\n"
-		"starts in a window, which draws the Xbox's 640x480. F11 switches, and\n"
-		"the settings overlay (F10) keeps the choice." },
+		"Start fullscreen at the display's resolution; false starts in a window.\n"
+		"F11 switches, and the settings overlay (F10) keeps the choice." },
+	{ "display.exclusive", _config_boolean, "false", "HALO_EXCLUSIVE", _environment_value, _platform_desktop,
+		"Fullscreen takes the display for the game alone; false covers it with a\n"
+		"borderless window, which switching to other windows does not disturb." },
+	{ "display.widescreen", _config_boolean, "true", "HALO_WIDESCREEN", _environment_value, _platform_desktop,
+		"The picture takes the shape of the display or the window; false keeps\n"
+		"the Xbox's 4:3, with bars at the sides." },
 	{ "display.render_scale", _config_string, "\"native\"", "HALO_RENDER_SCALE", _environment_value, _platform_desktop,
-		"How finely fullscreen draws the game's 480 lines: \"native\" at the\n"
-		"display's height; \"integer\" at the largest whole multiple of 480 that\n"
-		"fits, scaled the rest of the way, for displays whose height is not one\n"
-		"(1080p) and whose menus show seams; \"original\" at 480, scaled up." },
+		"How finely the game's 480 lines are drawn: \"native\" at the height of\n"
+		"the display or window; \"integer\" at the largest whole multiple of 480\n"
+		"that fits, scaled the rest of the way, for heights that are not one\n"
+		"(1080p) where the menus show seams; \"original\" at 480, scaled up." },
+	{ "display.window_height", _config_integer, "0", "HALO_WINDOW_HEIGHT", _environment_value, _platform_desktop,
+		"The window's height in pixels, its width following widescreen; 0 for\n"
+		"480 times window_scale. The window can also be resized." },
 	{ "display.window_scale", _config_integer, "2", "HALO_WINDOW_SCALE", _environment_value, _platform_desktop,
-		"The window's size as a multiple of 640x480 (it can be resized)." },
+		"The window's height as a multiple of 480, when window_height is 0." },
 	{ "display.screen_width", _config_integer, "0", "HALO_SCREEN_WIDTH", _environment_value, _platform_android,
 		"Columns of the 480-line picture: 0 for the display's shape, 640 for the\n"
 		"Xbox's 4:3." },

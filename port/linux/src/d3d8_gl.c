@@ -63,14 +63,16 @@ struct xgpu_capabilities xgpu_capabilities;
 The Xbox screen is 640x480. The native ports can draw a wider one: 480
 lines, and as many columns as the display's shape gives. On Android that is
 display.screen_width (port_config.c; 640 keeps 4:3); on the desktop, the
-display's shape while the game is fullscreen, and 640 in a window. The
+shape of the display while the game is fullscreen and of the window
+otherwise, or 640 without display.widescreen. The
 game's camera derives its horizontal field of view from the viewport, so the
 3D view simply widens. The menus and full-screen overlays are laid out for
 640 columns; while they draw (halo_screen_ui_offset), everything shifts right
 to center them.
 
-Fullscreen on the desktop also draws at the display's resolution: render
-targets the size of the screen get that many pixels (screen_scale), and
+The desktop also draws at the resolution of the display or the window
+(platform_screen_mode): render targets the size of the screen get that
+many pixels (screen_scale), and
 viewports, clears and visibility counts are scaled to match, so the game
 still works in its 480 lines. The scale is the same both ways, so that at a
 whole one (1440 lines: 3) every edge of the menus' tiles lands between two
@@ -114,9 +116,10 @@ static void screen_mode_choose(long *width, float scale[2])
 	if (platform_screen_mode(&display_width, &display_height) && display_width > 0 && display_height > 0)
 	{
 		const char *render_scale = config_string("display.render_scale");
-		/* the scale the display's height gives, and the columns that fit at it */
+		/* the scale the display's height gives, and the columns that fit at
+		it (4:3 without widescreen: the display blit leaves bars) */
 		float fit = (float)display_height / (float)SCREEN_HEIGHT;
-		long wanted = (long)((float)display_width / fit);
+		long wanted = config_boolean("display.widescreen") ? (long)((float)display_width / fit) : 640;
 		float chosen;
 
 		*width = wanted < 640 ? 640 : wanted > SCREEN_MAXIMUM_WIDTH ? SCREEN_MAXIMUM_WIDTH : wanted & ~1L;
@@ -129,8 +132,9 @@ static void screen_mode_choose(long *width, float scale[2])
 			chosen = floorf(fit);
 		else
 			chosen = fit;
-		/* (the display blit letterboxes and scales what is left) */
-		scale[0] = scale[1] = chosen;
+		/* (the display blit letterboxes and scales what is left; a window
+		smaller than the Xbox's screen is drawn at 1 and shrunk) */
+		scale[0] = scale[1] = chosen < 1.0f ? 1.0f : chosen;
 	}
 #endif
 }

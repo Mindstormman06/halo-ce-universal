@@ -310,24 +310,86 @@ static BOOL platform_fullscreen_setting(void)
 	return !config_boolean("debug.hidden_window") && config_boolean("display.fullscreen");
 }
 
-/* whether the game is, or is to be, fullscreen, and if so the size in
-pixels of the display it fills (d3d8_gl.c draws at that resolution) */
+/* the display the window is on, or is to open on */
+static SDL_DisplayID platform_display(void)
+{
+	return platform_window ? SDL_GetDisplayForWindow(platform_window) : SDL_GetPrimaryDisplay();
+}
+
+/* the display's shape, width over height */
+static float platform_display_aspect(void)
+{
+	SDL_DisplayID display = platform_display();
+	const SDL_DisplayMode *mode = display ? SDL_GetDesktopDisplayMode(display) : NULL;
+
+	return mode && mode->h > 0 ? (float)mode->w / (float)mode->h : 16.0f / 9.0f;
+}
+
+/* the window's width for a height: the display's shape with
+display.widescreen, otherwise the Xbox's 4:3 */
+int platform_video_window_width(int height)
+{
+	float aspect = config_boolean("display.widescreen") ? platform_display_aspect() : 4.0f / 3.0f;
+
+	if (aspect < 4.0f / 3.0f)
+		aspect = 4.0f / 3.0f;
+	return ((int)((float)height * aspect + 0.5f)) & ~1;
+}
+
+/* the window's height: display.window_height, or 480 lines times
+display.window_scale */
+static int platform_window_height_setting(void)
+{
+	long height = config_integer("display.window_height");
+	long scale = config_integer("display.window_scale");
+
+	if (height >= 240)
+		return (int)height;
+	return 480 * (int)(scale < 1 ? 1 : scale);
+}
+
+/* the size in pixels of what the game fills: the display while it is
+fullscreen, otherwise the window (d3d8_gl.c draws at that resolution);
+FALSE for a hidden window, which draws the Xbox's 640x480 */
 BOOL platform_screen_mode(long *width, long *height)
 {
-	SDL_DisplayID display;
-	const SDL_DisplayMode *mode;
+	static int last_width, last_height;
+	int pixel_width = 0, pixel_height = 0;
 
-	if (platform_window ? !(SDL_GetWindowFlags(platform_window) & SDL_WINDOW_FULLSCREEN) :
-		!platform_fullscreen_setting() || !platform_sdl_initialize())
+	if (config_boolean("debug.hidden_window") || !platform_sdl_initialize())
+		return FALSE;
+	if (platform_window)
 	{
-		return FALSE;
+		SDL_GetWindowSizeInPixels(platform_window, &pixel_width, &pixel_height);
+		/* (a minimized window keeps the size it had) */
+		if (pixel_width <= 0 || pixel_height <= 0)
+		{
+			pixel_width = last_width;
+			pixel_height = last_height;
+		}
 	}
-	display = platform_window ? SDL_GetDisplayForWindow(platform_window) : SDL_GetPrimaryDisplay();
-	mode = display ? SDL_GetDesktopDisplayMode(display) : NULL;
-	if (!mode)
+	else if (platform_fullscreen_setting())
+	{
+		SDL_DisplayID display = platform_display();
+		const SDL_DisplayMode *mode = display ? SDL_GetDesktopDisplayMode(display) : NULL;
+
+		if (mode)
+		{
+			pixel_width = (int)(mode->w * mode->pixel_density + 0.5f);
+			pixel_height = (int)(mode->h * mode->pixel_density + 0.5f);
+		}
+	}
+	else
+	{
+		pixel_height = platform_window_height_setting();
+		pixel_width = platform_video_window_width(pixel_height);
+	}
+	if (pixel_width <= 0 || pixel_height <= 0)
 		return FALSE;
-	*width = (long)(mode->w * mode->pixel_density + 0.5f);
-	*height = (long)(mode->h * mode->pixel_density + 0.5f);
+	last_width = pixel_width;
+	last_height = pixel_height;
+	*width = pixel_width;
+	*height = pixel_height;
 	return TRUE;
 }
 
@@ -343,6 +405,12 @@ BOOL platform_video_initialize(unsigned long width, unsigned long height)
 		return FALSE;
 	if (scale < 1)
 		scale = 1;
+#ifndef HALO_ANDROID
+	/* (the window's own size, not the device's) */
+	height = (unsigned long)platform_window_height_setting();
+	width = (unsigned long)platform_video_window_width((int)height);
+	scale = 1;
+#endif
 
 #ifdef HALO_ANDROID
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
@@ -371,13 +439,16 @@ BOOL platform_video_initialize(unsigned long width, unsigned long height)
 		SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN);
 #else
 	/* fullscreen at the desktop's resolution unless display.fullscreen is
-	false, where the game draws the display's shape at its resolution
-	(d3d8_gl.c); the window size is the windowed mode F11 switches to and
-	from, where it draws 640x480 */
-	platform_window = SDL_CreateWindow("Halo", (int)(width * scale), (int)(height * scale),
+	false; the window size is the windowed mode F11 switches to and from.
+	The game draws at the resolution of either (d3d8_gl.c). */
+	platform_window = SDL_CreateWindow("Halo", (int)width, (int)height,
 		SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY |
-		(config_boolean("debug.hidden_window") ? SDL_WINDOW_HIDDEN : 0) |
-		(platform_fullscreen_setting() ? SDL_WINDOW_FULLSCREEN : 0));
+		(config_boolean("debug.hidden_window") ? SDL_WINDOW_HIDDEN : 0));
+	if (platform_window && platform_fullscreen_setting())
+	{
+		platform_video_set_display_mode(config_boolean("display.exclusive") ? _platform_display_exclusive :
+			_platform_display_borderless);
+	}
 #endif
 	if (!platform_window)
 	{
@@ -892,38 +963,80 @@ void platform_video_window_size(int *width, int *height)
 
 /* ---------- the settings overlay's (overlay.c) */
 
-BOOL platform_video_fullscreen(void)
+enum platform_display_mode platform_video_display_mode(void)
 {
-	return platform_window && (SDL_GetWindowFlags(platform_window) & SDL_WINDOW_FULLSCREEN) != 0;
+	if (!platform_window || !(SDL_GetWindowFlags(platform_window) & SDL_WINDOW_FULLSCREEN))
+		return _platform_display_windowed;
+	return SDL_GetWindowFullscreenMode(platform_window) ? _platform_display_exclusive : _platform_display_borderless;
 }
 
-/* fullscreen at the desktop's resolution, or the window */
-void platform_video_set_fullscreen(BOOL fullscreen)
+/* exclusive fullscreen takes the display, in its desktop mode, for the game
+alone; borderless covers it with a window (SDL's fullscreen without a
+mode). F11 switches between the fullscreen last chosen and the window. */
+void platform_video_set_display_mode(enum platform_display_mode mode)
 {
-	if (platform_window && fullscreen != platform_video_fullscreen())
-		SDL_SetWindowFullscreen(platform_window, fullscreen ? true : false);
+	if (!platform_window)
+		return;
+	if (mode == _platform_display_windowed)
+	{
+		SDL_SetWindowFullscreen(platform_window, false);
+		return;
+	}
+	if (mode == _platform_display_exclusive)
+	{
+		SDL_DisplayID display = platform_display();
+		const SDL_DisplayMode *desktop = display ? SDL_GetDesktopDisplayMode(display) : NULL;
+		SDL_DisplayMode closest;
+
+		if (desktop && SDL_GetClosestFullscreenDisplayMode(display, desktop->w, desktop->h, desktop->refresh_rate,
+			true, &closest))
+		{
+			SDL_SetWindowFullscreenMode(platform_window, &closest);
+		}
+		else
+		{
+			platform_log("no exclusive fullscreen mode (%s); borderless instead", SDL_GetError());
+			SDL_SetWindowFullscreenMode(platform_window, NULL);
+		}
+	}
+	else
+	{
+		SDL_SetWindowFullscreenMode(platform_window, NULL);
+	}
+	SDL_SetWindowFullscreen(platform_window, true);
 }
 
-/* the largest multiple of 640x480 a window fits on the display at */
-int platform_video_maximum_window_scale(void)
+/* the window heights offered, low to high: common ones whose window, with
+its frame, fits on the display; returns how many */
+int platform_video_window_heights(int *heights, int maximum)
 {
-	SDL_DisplayID display = platform_window ? SDL_GetDisplayForWindow(platform_window) : 0;
+	static const int common[] = { 480, 600, 720, 768, 900, 960, 1080, 1200, 1440, 1600, 1800, 2160, 2880 };
+	SDL_DisplayID display = platform_display();
 	SDL_Rect bounds;
-	int scale;
+	int top = 32, count = 0, index;
 
 	if (!display || !SDL_GetDisplayUsableBounds(display, &bounds))
-		return 1;
-	scale = bounds.w / 640 < bounds.h / 480 ? bounds.w / 640 : bounds.h / 480;
-	return scale < 1 ? 1 : scale;
+	{
+		bounds.w = 1280;
+		bounds.h = 1024;
+	}
+	if (platform_window && platform_video_display_mode() == _platform_display_windowed)
+		SDL_GetWindowBordersSize(platform_window, &top, NULL, NULL, NULL);
+	for (index = 0; index < (int)(sizeof(common) / sizeof(common[0])) && count < maximum; index++)
+	{
+		if (index == 0 || (common[index] + top <= bounds.h && platform_video_window_width(common[index]) <= bounds.w))
+			heights[count++] = common[index];
+	}
+	return count;
 }
 
-/* the window's size, 640x480 times scale, centered; kept for the window
-while fullscreen */
-void platform_video_set_window_scale(int scale)
+/* the window's size for a height (in the shape display.widescreen gives),
+centered; only for the window */
+void platform_video_set_window_height(int height)
 {
-	if (!platform_window || platform_video_fullscreen())
+	if (!platform_window || platform_video_display_mode() != _platform_display_windowed)
 		return;
-	SDL_SetWindowSize(platform_window, 640 * scale, 480 * scale);
+	SDL_SetWindowSize(platform_window, platform_video_window_width(height), height);
 	SDL_SetWindowPosition(platform_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
 }
 

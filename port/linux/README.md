@@ -140,7 +140,7 @@ controller, push back and start together. The overlay has three tabs:
 
 | Tab | Settings |
 | --- | --- |
-| Display | fullscreen or window, the size of the window, the resolution of fullscreen, vertical sync, smooth motion, the frame counter |
+| Display | fullscreen, borderless or window, the size of the window, widescreen, the resolution, vertical sync, smooth motion, the frame counter |
 | Audio | the volume of everything, of the music, of the effects and of the dialogue |
 | Controls | the mouse sensitivity, the inverted mouse |
 
@@ -184,9 +184,12 @@ the setting for one start of the game. It has priority over the file.
 
 | Setting | Default | Environment variable | Function |
 | --- | --- | --- | --- |
-| `display.fullscreen` | `true` | `HALO_FULLSCREEN` | `true`: fullscreen at the resolution of the display. The picture has 480 lines of the game and the width of the display. `false`: a window with the 640x480 picture of the Xbox. F11 changes between the two. |
-| `display.render_scale` | `"native"` | `HALO_RENDER_SCALE` | The resolution of fullscreen. `"native"`: the height of the display. Each pixel of the game has the same size across and down. `"integer"`: the largest multiple of 480 lines that the display holds. The display scales the remainder. Use this value if the menus show thin lines, for example on a 1080p display. `"original"`: 480 lines. |
-| `display.window_scale` | `2` | `HALO_WINDOW_SCALE` | The size of the window, as a multiple of 640x480. You can change the size of the window. |
+| `display.fullscreen` | `true` | `HALO_FULLSCREEN` | `true`: fullscreen at the resolution of the display. `false`: a window. F11 changes between the two. |
+| `display.exclusive` | `false` | `HALO_EXCLUSIVE` | `true`: fullscreen takes the display for the game only. `false`: a window without a frame covers the display (borderless). |
+| `display.widescreen` | `true` | `HALO_WIDESCREEN` | `true`: the picture has the shape of the display, or of the window. `false`: the 4:3 picture of the Xbox, with bars at the sides. |
+| `display.render_scale` | `"native"` | `HALO_RENDER_SCALE` | The resolution. The game has 480 lines. `"native"`: the height of the display or the window. Each pixel of the game has the same size across and down. `"integer"`: the largest multiple of 480 lines that the display or the window holds. The display scales the remainder. Use this value if the menus show thin lines, for example on a 1080p display. `"original"`: 480 lines. |
+| `display.window_height` | `0` | `HALO_WINDOW_HEIGHT` | The height of the window, in pixels. The width follows `display.widescreen`. `0`: 480 lines multiplied by `display.window_scale`. You can change the size of the window. |
+| `display.window_scale` | `2` | `HALO_WINDOW_SCALE` | The height of the window, as a multiple of 480, if `display.window_height` is `0`. |
 | `display.vsync` | `true` | `HALO_NO_VSYNC=1` sets `false` | `true`: each frame waits for the display. |
 | `display.interpolation` | `true` | `HALO_INTERPOLATION` | `true`: one frame for each refresh of the display. `false`: 30 frames each second, as on the Xbox. Refer to "Frame rate". |
 | `display.show_fps` | `false` | `HALO_SHOW_FPS` | `true`: the frames each second show in the top-left corner. |

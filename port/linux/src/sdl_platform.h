@@ -64,10 +64,18 @@ void platform_ui_pointer_set_active(BOOL active);
 BOOL platform_ui_pointer_read(struct platform_ui_pointer *pointer);
 void platform_video_window_size(int *width, int *height);
 /* the window, for the settings overlay (overlay.c) */
-BOOL platform_video_fullscreen(void);
-void platform_video_set_fullscreen(BOOL fullscreen);
-int platform_video_maximum_window_scale(void);
-void platform_video_set_window_scale(int scale);
+enum platform_display_mode
+{
+	_platform_display_exclusive,
+	_platform_display_borderless,
+	_platform_display_windowed,
+};
+enum platform_display_mode platform_video_display_mode(void);
+void platform_video_set_display_mode(enum platform_display_mode mode);
+int platform_video_window_heights(int *heights, int maximum);
+void platform_video_set_window_height(int height);
+/* a window's width for its height, in the shape display.widescreen gives */
+int platform_video_window_width(int height);
 void platform_video_set_vsync(BOOL vsync);
 /* the volumes of everything and of the game's music, other sounds and
 speech, 0 to 1 (dsound_sdl.c) */
