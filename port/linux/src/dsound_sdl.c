@@ -27,7 +27,10 @@ Without an audio device, a clock thread runs the same mixer into a scratch
 buffer, so streams still drain at their real rate.
 
 audio.volume sets the master volume (default 1.0); audio.enabled = false
-skips opening a device (port_config.c).
+skips opening a device (port_config.c). audio.music_volume,
+audio.effects_volume and audio.dialog_volume scale the game's sound classes
+(halo_sound_class_volume, which the sound manager asks). The settings
+overlay (overlay.c) changes all four while the game runs.
 */
 
 #include "platform.h"
@@ -113,7 +116,64 @@ static struct
 	float distance_factor;
 } listener = { { 0, 0, 0 }, { 0, 0, 1 }, { 0, 1, 0 }, 1.0f, 1.0f };
 
-static float master_volume = 1.0f;
+/* written by the main thread, read by the mixer: a torn read of a float
+cannot happen on the machines the ports run on */
+static volatile float master_volume = 1.0f;
+
+enum
+{
+	_volume_music,
+	_volume_effects,
+	_volume_dialog,
+	NUMBER_OF_CLASS_VOLUMES
+};
+
+static volatile float class_volumes[NUMBER_OF_CLASS_VOLUMES] = { 1.0f, 1.0f, 1.0f };
+static BOOL volumes_loaded = FALSE;
+
+static float volume_clamp(double volume)
+{
+	return volume < 0.0 ? 0.0f : volume > 1.0 ? 1.0f : (float)volume;
+}
+
+static void volumes_load(void)
+{
+	if (volumes_loaded)
+		return;
+	volumes_loaded = TRUE;
+	master_volume = volume_clamp(config_real("audio.volume"));
+	class_volumes[_volume_music] = volume_clamp(config_real("audio.music_volume"));
+	class_volumes[_volume_effects] = volume_clamp(config_real("audio.effects_volume"));
+	class_volumes[_volume_dialog] = volume_clamp(config_real("audio.dialog_volume"));
+}
+
+void dsound_volumes_set(float master, float music, float effects, float dialog)
+{
+	volumes_loaded = TRUE;
+	master_volume = volume_clamp(master);
+	class_volumes[_volume_music] = volume_clamp(music);
+	class_volumes[_volume_effects] = volume_clamp(effects);
+	class_volumes[_volume_dialog] = volume_clamp(dialog);
+}
+
+/* the gain of a sound class (source/sound/sound_classes.h): the music, the
+speech of units and scripts, and the rest */
+float halo_sound_class_volume(short class_index)
+{
+	volumes_load();
+	switch (class_index)
+	{
+	case 32: /* _sound_class_music */
+		return class_volumes[_volume_music];
+	case 19: /* _sound_class_unit_dialog */
+	case 44: /* _sound_class_scripted_dialog_to_player */
+	case 46: /* _sound_class_scripted_dialog_to_other */
+	case 47: /* _sound_class_scripted_dialog_force_unspatialized */
+		return class_volumes[_volume_dialog];
+	default:
+		return class_volumes[_volume_effects];
+	}
+}
 
 static float gain_from_millibels(LONG millibels)
 {
@@ -479,7 +539,7 @@ static void audio_start(void)
 	if (audio_started)
 		return;
 	audio_started = TRUE;
-	master_volume = (float)config_real("audio.volume");
+	volumes_load();
 
 	if (config_boolean("audio.enabled") && platform_sdl_initialize())
 	{

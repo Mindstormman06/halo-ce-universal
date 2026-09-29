@@ -115,6 +115,7 @@ to 4.
 | \` | | open the developer console |
 | F12 | | release or capture the mouse |
 | F11 | | change between fullscreen and window |
+| F10 | back and start together | open or close the settings overlay |
 
 One movement of the mouse wheel changes the weapon one time. A second
 movement after a short pause changes it again.
@@ -132,6 +133,40 @@ The keyboard also operates the menus. When the game continues, the mouse
 aims again. A mouse button that you hold from the menu does not fire until
 you push it again.
 
+## The settings overlay
+
+On Linux and Windows, F10 opens the settings overlay above the game. On a
+controller, push back and start together. The overlay has three tabs:
+
+| Tab | Settings |
+| --- | --- |
+| Display | fullscreen or window, the size of the window, the resolution of fullscreen, vertical sync, smooth motion, the frame counter |
+| Audio | the volume of everything, of the music, of the effects and of the dialogue |
+| Controls | the mouse sensitivity, the inverted mouse |
+
+A change operates immediately, except smooth motion, which operates at the
+next start. The overlay writes each change to `config.toml`.
+
+While the overlay is open, the game gets no input. In a game on one
+machine, the game also stops. A system link game continues.
+
+| Key | Controller | Function |
+| --- | --- | --- |
+| up, down (W, S) | D-pad, left stick | move the focus |
+| left, right (A, D) | D-pad, left stick | change the value |
+| enter, space | A | change a switch, push a button |
+| Q, E, tab | LB, RB | change the tab |
+| escape, F10 | B | close the overlay |
+
+The mouse also operates the overlay. A click on the left or right half of
+a value changes it. A drag moves a slider. The mouse wheel changes the value
+below the pointer. A right click, or a click outside the overlay, closes it.
+
+"Quit game" stops the game. Push it two times.
+
+At the start, the game shows "F10 Settings" at the bottom of the screen
+until you open the overlay for the first time.
+
 ## Settings
 
 The settings are in `config.toml` next to the executable
@@ -141,7 +176,8 @@ values again, delete the file.
 
 The game reads the file one time, at start-up. If a key is not correct, or
 a value has the wrong type, the game writes the line to the log and uses the
-default value.
+default value. The settings overlay changes the file while the game
+operates, but it changes only the lines of its settings.
 
 Each setting has an environment variable. The environment variable changes
 the setting for one start of the game. It has priority over the file.
@@ -149,11 +185,15 @@ the setting for one start of the game. It has priority over the file.
 | Setting | Default | Environment variable | Function |
 | --- | --- | --- | --- |
 | `display.fullscreen` | `true` | `HALO_FULLSCREEN` | `true`: fullscreen at the resolution of the display. The picture has 480 lines of the game and the width of the display. `false`: a window with the 640x480 picture of the Xbox. F11 changes between the two. |
+| `display.render_scale` | `"native"` | `HALO_RENDER_SCALE` | The resolution of fullscreen. `"native"`: the height of the display. Each pixel of the game has the same size across and down. `"integer"`: the largest multiple of 480 lines that the display holds. The display scales the remainder. Use this value if the menus show thin lines, for example on a 1080p display. `"original"`: 480 lines. |
 | `display.window_scale` | `2` | `HALO_WINDOW_SCALE` | The size of the window, as a multiple of 640x480. You can change the size of the window. |
 | `display.vsync` | `true` | `HALO_NO_VSYNC=1` sets `false` | `true`: each frame waits for the display. |
 | `display.interpolation` | `true` | `HALO_INTERPOLATION` | `true`: one frame for each refresh of the display. `false`: 30 frames each second, as on the Xbox. Refer to "Frame rate". |
+| `display.show_fps` | `false` | `HALO_SHOW_FPS` | `true`: the frames each second show in the top-left corner. |
+| `display.settings_hint` | `true` | `HALO_SETTINGS_HINT` | `true`: at the start, the game shows that F10 opens the settings. The overlay sets `false` when you open it. |
 | `audio.enabled` | `true` | `HALO_NO_AUDIO=1` sets `false` | `false`: no audio device. The sound continues without output. |
 | `audio.volume` | `1.0` | `HALO_VOLUME` | The master volume. |
+| `audio.music_volume`, `audio.effects_volume`, `audio.dialog_volume` | `1.0` | `HALO_MUSIC_VOLUME`, `HALO_EFFECTS_VOLUME`, `HALO_DIALOG_VOLUME` | The volume of the music, of the speech, and of all other sounds. The master volume multiplies them. |
 | `input.mouse_sensitivity` | `1.0` | `HALO_MOUSE_SENSITIVITY` | The multiplier for the mouse aim. |
 | `input.invert_mouse` | `false` | `HALO_MOUSE_INVERT=1` sets `true` | `true`: the vertical mouse aim is inverted. |
 | `game.language` | `""` | `HALO_LANGUAGE` | The language of the menus: `ja`, `de`, `fr`, `es` or `it`. Empty: English. |

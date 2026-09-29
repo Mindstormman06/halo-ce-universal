@@ -63,6 +63,15 @@ struct platform_ui_pointer
 void platform_ui_pointer_set_active(BOOL active);
 BOOL platform_ui_pointer_read(struct platform_ui_pointer *pointer);
 void platform_video_window_size(int *width, int *height);
+/* the window, for the settings overlay (overlay.c) */
+BOOL platform_video_fullscreen(void);
+void platform_video_set_fullscreen(BOOL fullscreen);
+int platform_video_maximum_window_scale(void);
+void platform_video_set_window_scale(int scale);
+void platform_video_set_vsync(BOOL vsync);
+/* the volumes of everything and of the game's music, other sounds and
+speech, 0 to 1 (dsound_sdl.c) */
+void dsound_volumes_set(float master, float music, float effects, float dialog);
 #endif
 BOOL platform_next_keystroke(struct platform_keystroke *keystroke);
 

@@ -67,7 +67,13 @@ static const struct config_setting config_settings[] =
 {
 	{ "display.fullscreen", _config_boolean, "true", "HALO_FULLSCREEN", _environment_value, _platform_desktop,
 		"Start fullscreen, drawing at the display's resolution and shape; false\n"
-		"starts in a window, which draws the Xbox's 640x480. F11 switches." },
+		"starts in a window, which draws the Xbox's 640x480. F11 switches, and\n"
+		"the settings overlay (F10) keeps the choice." },
+	{ "display.render_scale", _config_string, "\"native\"", "HALO_RENDER_SCALE", _environment_value, _platform_desktop,
+		"How finely fullscreen draws the game's 480 lines: \"native\" at the\n"
+		"display's height; \"integer\" at the largest whole multiple of 480 that\n"
+		"fits, scaled the rest of the way, for displays whose height is not one\n"
+		"(1080p) and whose menus show seams; \"original\" at 480, scaled up." },
 	{ "display.window_scale", _config_integer, "2", "HALO_WINDOW_SCALE", _environment_value, _platform_desktop,
 		"The window's size as a multiple of 640x480 (it can be resized)." },
 	{ "display.screen_width", _config_integer, "0", "HALO_SCREEN_WIDTH", _environment_value, _platform_android,
@@ -78,11 +84,21 @@ static const struct config_setting config_settings[] =
 	{ "display.interpolation", _config_boolean, "true", "HALO_INTERPOLATION", _environment_value, _platform_all,
 		"Draw a frame for every display refresh, blending between the game's 30\n"
 		"ticks a second; false keeps the original 30 frames a second." },
+	{ "display.show_fps", _config_boolean, "false", "HALO_SHOW_FPS", _environment_value, _platform_desktop,
+		"Show the frames drawn each second in the corner." },
+	{ "display.settings_hint", _config_boolean, "true", "HALO_SETTINGS_HINT", _environment_value, _platform_desktop,
+		"Say at start-up that F10 opens the settings, until they are first opened." },
 
 	{ "audio.enabled", _config_boolean, "true", "HALO_NO_AUDIO", _environment_set_is_false, _platform_all,
 		"Play sound." },
 	{ "audio.volume", _config_real, "1.0", "HALO_VOLUME", _environment_value, _platform_all,
 		"The volume of everything, 0.0 to 1.0." },
+	{ "audio.music_volume", _config_real, "1.0", "HALO_MUSIC_VOLUME", _environment_value, _platform_all,
+		"The volume of the music, 0.0 to 1.0, within the volume of everything." },
+	{ "audio.effects_volume", _config_real, "1.0", "HALO_EFFECTS_VOLUME", _environment_value, _platform_all,
+		"The volume of the sounds that are neither music nor speech, 0.0 to 1.0." },
+	{ "audio.dialog_volume", _config_real, "1.0", "HALO_DIALOG_VOLUME", _environment_value, _platform_all,
+		"The volume of speech, 0.0 to 1.0." },
 
 	{ "input.mouse_sensitivity", _config_real, "1.0", "HALO_MOUSE_SENSITIVITY", _environment_value, _platform_desktop,
 		"How far the view turns for the mouse's movement." },
@@ -769,28 +785,50 @@ static int config_line_section(const char *line, const char *end, char *section,
 	return 1;
 }
 
-/* sets a boolean setting, for now and in config.toml: its line there is
-changed (or added), the rest of the file kept as it is */
-int config_write_boolean(const char *name, int value)
+/* sets a setting for now and, with text_value (the value as the file writes
+it), in config.toml: its line there is changed (or added), the rest of the
+file kept as it is. value is the new value, of the setting's type */
+static int config_write(const char *name, enum config_type type, const struct config_value *value,
+	const char *text_value)
 {
 	const char *dot = strchr(name, '.');
 	long index = config_setting_index(name);
-	char section[64], key[64], wanted[80], current[64] = "", line_text[96], path[1024];
+	char section[64], key[64], wanted[80], current[64] = "", line_text[1152], path[1024];
 	struct config_text out = { 0 };
 	size_t size = 0;
 	char *text;
 	const char *line;
 	int written = 0, in_section = 0, succeeded;
 
-	if (index < 0 || config_settings[index].type != _config_boolean || !dot || (size_t)(dot - name) >= sizeof(section))
+	if (index < 0 || config_settings[index].type != type || !dot || (size_t)(dot - name) >= sizeof(section))
 		return 0;
 	/* (the file read first, as the other settings are) */
-	config_boolean(name);
+	config_value(name, type);
 	pthread_mutex_lock(&config_lock);
-	config_values[index].boolean = value != 0;
+	switch (type)
+	{
+	case _config_boolean:
+		config_values[index].boolean = value->boolean;
+		break;
+	case _config_integer:
+		config_values[index].integer = value->integer;
+		break;
+	case _config_real:
+		config_values[index].real = value->real;
+		break;
+	case _config_string:
+		/* (the old string is kept: a caller may still hold it) */
+		config_values[index].string = strdup(value->string);
+		break;
+	}
+	if (!text_value)
+	{
+		pthread_mutex_unlock(&config_lock);
+		return 1;
+	}
 	snprintf(section, sizeof(section), "%.*s", (int)(dot - name), name);
 	snprintf(key, sizeof(key), "%s", dot + 1);
-	snprintf(line_text, sizeof(line_text), "%s = %s\n", key, value ? "true" : "false");
+	snprintf(line_text, sizeof(line_text), "%s = %s\n", key, text_value);
 	snprintf(wanted, sizeof(wanted), "%s", section);
 	config_path(path, sizeof(path));
 	text = config_read_file(path, &size);
@@ -846,6 +884,57 @@ int config_write_boolean(const char *name, int value)
 	free(text);
 	return succeeded;
 }
+
+static int config_store_boolean(const char *name, int value, int file)
+{
+	struct config_value written = { 0 };
+
+	written.boolean = value != 0;
+	return config_write(name, _config_boolean, &written, !file ? NULL : value ? "true" : "false");
+}
+
+static int config_store_integer(const char *name, long value, int file)
+{
+	struct config_value written = { 0 };
+	char text[32];
+
+	written.integer = value;
+	snprintf(text, sizeof(text), "%ld", value);
+	return config_write(name, _config_integer, &written, file ? text : NULL);
+}
+
+static int config_store_real(const char *name, double value, int file)
+{
+	struct config_value written = { 0 };
+	char text[32];
+
+	written.real = value;
+	/* (with a point, so that TOML reads a float) */
+	snprintf(text, sizeof(text), "%.2f", value);
+	return config_write(name, _config_real, &written, file ? text : NULL);
+}
+
+static int config_store_string(const char *name, const char *value, int file)
+{
+	struct config_value written = { 0 };
+	char text[1024];
+
+	/* a TOML literal string, which has no escapes */
+	if (strpbrk(value, "'\r\n") || strlen(value) + 3 > sizeof(text))
+		return 0;
+	written.string = (char *)value;
+	snprintf(text, sizeof(text), "'%s'", value);
+	return config_write(name, _config_string, &written, file ? text : NULL);
+}
+
+int config_set_boolean(const char *name, int value) { return config_store_boolean(name, value, 0); }
+int config_set_integer(const char *name, long value) { return config_store_integer(name, value, 0); }
+int config_set_real(const char *name, double value) { return config_store_real(name, value, 0); }
+int config_set_string(const char *name, const char *value) { return config_store_string(name, value, 0); }
+int config_write_boolean(const char *name, int value) { return config_store_boolean(name, value, 1); }
+int config_write_integer(const char *name, long value) { return config_store_integer(name, value, 1); }
+int config_write_real(const char *name, double value) { return config_store_real(name, value, 1); }
+int config_write_string(const char *name, const char *value) { return config_store_string(name, value, 1); }
 
 /* ---------- public code */
 

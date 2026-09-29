@@ -15,6 +15,9 @@ and the debug keyboard that the game's console reads.
 #include "port_config.h"
 #include "p2p.h"
 #include "xiso.h"
+#ifndef HALO_ANDROID
+#include "overlay.h"
+#endif
 
 #include <SDL3/SDL.h>
 #include <stdio.h>
@@ -46,6 +49,7 @@ static unsigned long keystroke_head, keystroke_count;
 /* updater.c's: the desktop self-updater */
 void updater_start(void);
 void updater_poll(SDL_Window *window);
+static void platform_overlay_changed(BOOL open);
 #endif
 
 BOOL platform_sdl_initialize(void)
@@ -675,6 +679,9 @@ void platform_pump_events(void)
 	SDL_Event event;
 	static BOOL looked_at_clipboard;
 	BOOL look_at_clipboard = !looked_at_clipboard;
+#ifndef HALO_ANDROID
+	BOOL overlay_changed = FALSE;
+#endif
 
 	if (!platform_window || SDL_GetCurrentThreadID() != platform_event_thread)
 		return;
@@ -696,6 +703,20 @@ void platform_pump_events(void)
 	pthread_mutex_lock(&input_lock);
 	while (SDL_PollEvent(&event))
 	{
+#ifndef HALO_ANDROID
+		/* the settings overlay takes the input while it is open */
+		switch (overlay_handle_event(&event))
+		{
+		case _overlay_event_opened:
+		case _overlay_event_closed:
+			overlay_changed = TRUE;
+			continue;
+		case _overlay_event_consumed:
+			continue;
+		default:
+			break;
+		}
+#endif
 		switch (event.type)
 		{
 		case SDL_EVENT_QUIT:
@@ -795,7 +816,7 @@ void platform_pump_events(void)
 			input_state.focused = TRUE;
 			look_at_clipboard = TRUE;
 #ifndef HALO_ANDROID
-			if (!input_state.mouse_released && !input_state.ui_pointer)
+			if (!input_state.mouse_released && !input_state.ui_pointer && !overlay_is_open())
 				platform_mouse_capture(TRUE);
 #endif
 			break;
@@ -807,6 +828,10 @@ void platform_pump_events(void)
 		}
 	}
 	pthread_mutex_unlock(&input_lock);
+#ifndef HALO_ANDROID
+	if (overlay_changed)
+		platform_overlay_changed(overlay_is_open());
+#endif
 	looked_at_clipboard = TRUE;
 	platform_invite_clipboard(look_at_clipboard);
 }
@@ -830,7 +855,7 @@ void platform_ui_pointer_set_active(BOOL active)
 	input_state.mouse_wheel = 0.0f;
 	memset(input_state.mouse_buttons, 0, sizeof(input_state.mouse_buttons));
 	pthread_mutex_unlock(&input_lock);
-	platform_mouse_capture(!active && !input_state.mouse_released);
+	platform_mouse_capture(!active && !input_state.mouse_released && !overlay_is_open());
 	if (active)
 	{
 		int width, height;
@@ -863,6 +888,67 @@ BOOL platform_ui_pointer_read(struct platform_ui_pointer *pointer)
 void platform_video_window_size(int *width, int *height)
 {
 	SDL_GetWindowSize(platform_window, width, height);
+}
+
+/* ---------- the settings overlay's (overlay.c) */
+
+BOOL platform_video_fullscreen(void)
+{
+	return platform_window && (SDL_GetWindowFlags(platform_window) & SDL_WINDOW_FULLSCREEN) != 0;
+}
+
+/* fullscreen at the desktop's resolution, or the window */
+void platform_video_set_fullscreen(BOOL fullscreen)
+{
+	if (platform_window && fullscreen != platform_video_fullscreen())
+		SDL_SetWindowFullscreen(platform_window, fullscreen ? true : false);
+}
+
+/* the largest multiple of 640x480 a window fits on the display at */
+int platform_video_maximum_window_scale(void)
+{
+	SDL_DisplayID display = platform_window ? SDL_GetDisplayForWindow(platform_window) : 0;
+	SDL_Rect bounds;
+	int scale;
+
+	if (!display || !SDL_GetDisplayUsableBounds(display, &bounds))
+		return 1;
+	scale = bounds.w / 640 < bounds.h / 480 ? bounds.w / 640 : bounds.h / 480;
+	return scale < 1 ? 1 : scale;
+}
+
+/* the window's size, 640x480 times scale, centered; kept for the window
+while fullscreen */
+void platform_video_set_window_scale(int scale)
+{
+	if (!platform_window || platform_video_fullscreen())
+		return;
+	SDL_SetWindowSize(platform_window, 640 * scale, 480 * scale);
+	SDL_SetWindowPosition(platform_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+}
+
+void platform_video_set_vsync(BOOL vsync)
+{
+	SDL_GL_SetSwapInterval(vsync ? 1 : 0);
+}
+
+/* the overlay opened or closed: while it is open the game gets no input
+and the mouse is free */
+static void platform_overlay_changed(BOOL open)
+{
+	pthread_mutex_lock(&input_lock);
+	memset(input_state.keys, 0, sizeof(input_state.keys));
+	memset(keys_pressed, 0, sizeof(keys_pressed));
+	memset(input_state.mouse_buttons, 0, sizeof(input_state.mouse_buttons));
+	input_state.mouse_dx = 0.0f;
+	input_state.mouse_dy = 0.0f;
+	input_state.mouse_wheel = 0.0f;
+	ui_pointer.left_clicks = 0;
+	ui_pointer.right_clicks = 0;
+	ui_pointer.wheel_steps = 0;
+	pthread_mutex_unlock(&input_lock);
+	platform_mouse_capture(!open && !input_state.mouse_released && !input_state.ui_pointer);
+	halo_overlay_pause(open);
 }
 
 #endif

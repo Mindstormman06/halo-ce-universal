@@ -42,6 +42,12 @@ long halo_screen_width(void);
 long halo_screen_commit(void);
 /* while TRUE, drawing shifts right to center 640-column layouts */
 void halo_screen_ui_offset(unsigned char centered);
+/* the player's volume for a sound class: music, speech or the rest
+(port/linux/src/dsound_sdl.c) */
+float halo_sound_class_volume(short class_index);
+/* while the settings overlay is open: pauses a local game
+(port/linux/game/overlay_pause.c) */
+void halo_overlay_pause(int paused);
 /* the mouse in the menus (source/interface/ui_widget.c) */
 #include "halo_ui_pointer.h"
 

@@ -18,8 +18,16 @@ long config_integer(const char *name);
 double config_real(const char *name);
 /* never NULL; "" when unset */
 const char *config_string(const char *name);
-/* sets a boolean setting, and writes it into config.toml (only its line
-changes); 1 on success */
+/* set a setting until the game ends; 1 on success */
+int config_set_boolean(const char *name, int value);
+int config_set_integer(const char *name, long value);
+int config_set_real(const char *name, double value);
+int config_set_string(const char *name, const char *value);
+/* set a setting, and write it into config.toml (only its line changes); 1
+on success */
 int config_write_boolean(const char *name, int value);
+int config_write_integer(const char *name, long value);
+int config_write_real(const char *name, double value);
+int config_write_string(const char *name, const char *value);
 
 #endif

@@ -25,6 +25,9 @@ Conventions carried over from the Xbox:
 #include "sdl_platform.h"
 #include "halo_ui_pointer.h"
 #include "port_config.h"
+#ifndef HALO_ANDROID
+#include "overlay.h"
+#endif
 
 #include <math.h>
 #include <stdio.h>
@@ -69,8 +72,13 @@ to center them.
 Fullscreen on the desktop also draws at the display's resolution: render
 targets the size of the screen get that many pixels (screen_scale), and
 viewports, clears and visibility counts are scaled to match, so the game
-still works in its 480 lines. The width and the scale change only between
-frames, after one is presented (halo_screen_commit). */
+still works in its 480 lines. The scale is the same both ways, so that at a
+whole one (1440 lines: 3) every edge of the menus' tiles lands between two
+pixels, and the columns are those that fit at it (a pixel or two of the
+display may stay black). display.render_scale can make it the largest
+whole scale that fits, or 1, the display blit scaling the rest of the way.
+The width and the scale change only between frames, after one is presented
+(halo_screen_commit). */
 
 #define SCREEN_HEIGHT 480
 #define SCREEN_MAXIMUM_WIDTH 1920
@@ -105,15 +113,24 @@ static void screen_mode_choose(long *width, float scale[2])
 	scale[0] = scale[1] = 1.0f;
 	if (platform_screen_mode(&display_width, &display_height) && display_width > 0 && display_height > 0)
 	{
-		long wanted = (SCREEN_HEIGHT * display_width + display_height / 2) / display_height;
+		const char *render_scale = config_string("display.render_scale");
+		/* the scale the display's height gives, and the columns that fit at it */
+		float fit = (float)display_height / (float)SCREEN_HEIGHT;
+		long wanted = (long)((float)display_width / fit);
+		float chosen;
 
 		*width = wanted < 640 ? 640 : wanted > SCREEN_MAXIMUM_WIDTH ? SCREEN_MAXIMUM_WIDTH : wanted & ~1L;
-		scale[0] = (float)display_width / (float)*width;
-		scale[1] = (float)display_height / (float)SCREEN_HEIGHT;
-		/* a display narrower or wider than the game can be: the picture
-		keeps its shape and the display blit letterboxes it */
-		if (*width != wanted && *width != (wanted & ~1L))
-			scale[0] = scale[1] = scale[0] < scale[1] ? scale[0] : scale[1];
+		/* a display narrower than the game can be: all of it, smaller */
+		if ((float)*width * fit > (float)display_width)
+			fit = (float)display_width / (float)*width;
+		if (!strcmp(render_scale, "original"))
+			chosen = 1.0f;
+		else if (!strcmp(render_scale, "integer") && fit >= 1.0f)
+			chosen = floorf(fit);
+		else
+			chosen = fit;
+		/* (the display blit letterboxes and scales what is left) */
+		scale[0] = scale[1] = chosen;
 	}
 #endif
 }
@@ -3639,6 +3656,12 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		/* row 0 of the render target is the top of the picture */
 		glBlitFramebuffer(0, 0, (GLint)back_buffer->target.gl_width, (GLint)back_buffer->target.gl_height,
 			x, y + height, x + width, y, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+#ifndef HALO_ANDROID
+		/* the settings overlay over the picture (it binds its own vertex
+		array; the state cache is invalidated below) */
+		overlay_draw(window_width, window_height);
+		glBindVertexArray(device.vertex_array);
+#endif
 		platform_video_swap();
 		xgpu_gl_state_invalidate();
 		xgpu_texture_cache_begin_frame();

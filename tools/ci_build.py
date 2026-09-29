@@ -92,6 +92,10 @@ def main() -> int:
     # internet play's UPnP (port/third_party/miniupnpc), in every build,
     # whose BSD license asks binaries to carry its notice
     shutil.copy2(ROOT / "port/third_party/miniupnpc/LICENSE", dist / "miniupnpc-LICENSE.txt")
+    if args.platform != "android":
+        # the settings overlay's font (port/third_party/titillium-web), whose
+        # Open Font License asks copies to carry its notice
+        shutil.copy2(ROOT / "port/third_party/titillium-web/OFL.txt", dist / "titillium-web-OFL.txt")
     return 0
 
 

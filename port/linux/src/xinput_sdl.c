@@ -35,6 +35,9 @@ drive the controller.
 #include "platform.h"
 #include "sdl_platform.h"
 #include "port_config.h"
+#ifndef HALO_ANDROID
+#include "overlay.h"
+#endif
 
 #include <SDL3/SDL.h>
 #include <math.h>
@@ -79,17 +82,12 @@ static Uint64 wheel_moved_ms = 0;
 static Uint64 wheel_press_until_ms = 0;
 static BOOL wheel_scrolling = FALSE;
 
+/* (asked every time: the settings overlay changes it) */
 static float mouse_sensitivity(void)
 {
-	static float sensitivity = -1.0f;
+	float sensitivity = (float)config_real("input.mouse_sensitivity");
 
-	if (sensitivity < 0.0f)
-	{
-		sensitivity = (float)config_real("input.mouse_sensitivity");
-		if (sensitivity <= 0.0f)
-			sensitivity = 1.0f;
-	}
-	return sensitivity;
+	return sensitivity > 0.0f ? sensitivity : 1.0f;
 }
 
 /* radians of yaw and pitch for the mouse motion since the last call; the
@@ -98,15 +96,14 @@ int halo_linux_mouse_look(short gamepad_index, float *yaw, float *pitch)
 {
 	/* radians per pixel of relative motion at sensitivity 1 */
 	const float scale = 0.0022f;
-	static int invert = -1;
+	int invert;
 	float x, y;
 
 	*yaw = 0.0f;
 	*pitch = 0.0f;
 	if (gamepad_index != 0)
 		return FALSE;
-	if (invert < 0)
-		invert = config_boolean("input.invert_mouse");
+	invert = config_boolean("input.invert_mouse");
 	pthread_mutex_lock(&mouse_lock);
 	x = mouse_pending_x;
 	y = mouse_pending_y;
@@ -507,6 +504,12 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	{
 		sdl_gamepad_state(gamepads[port], &state->Gamepad);
 	}
+#ifndef HALO_ANDROID
+	/* nothing reaches the game while the settings overlay is open, nor
+	the buttons that closed it */
+	if (overlay_holds_gamepad(&state->Gamepad))
+		memset(&state->Gamepad, 0, sizeof(state->Gamepad));
+#endif
 
 	if (memcmp(&state->Gamepad, &controllers[port].previous, sizeof(state->Gamepad)))
 	{

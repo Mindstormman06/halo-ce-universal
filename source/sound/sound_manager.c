@@ -1125,6 +1125,10 @@ static real sound_manager_master_gain(
 	{
 		gain *= sound_manager_globals.nondialog_gain;
 	}
+#ifdef HALO_LINUX
+	/* the player's volumes (port/linux/src/dsound_sdl.c) */
+	gain *= halo_sound_class_volume(class_index);
+#endif
 
 	return gain;
 }
