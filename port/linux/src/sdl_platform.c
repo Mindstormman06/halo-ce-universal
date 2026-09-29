@@ -302,6 +302,15 @@ int halo_interpolation_enabled(void)
 	return enabled;
 }
 
+int halo_errors_on_screen(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0)
+		enabled = config_boolean("debug.errors_on_screen");
+	return enabled;
+}
+
 #ifndef HALO_ANDROID
 /* whether the window opens fullscreen (display.fullscreen), never when it
 is hidden */
@@ -394,6 +403,35 @@ BOOL platform_screen_mode(long *width, long *height)
 }
 
 #endif
+#ifndef HALO_ANDROID
+/* at exit (every way the game ends calls exit()): out of fullscreen, and the
+window and its context closed, as SDL does it, before the process goes.
+Left to Windows, the display can keep what the driver set it to for a
+fullscreen OpenGL window: an HDR display stays dark until HDR is switched
+off and on again. Only from the thread the window belongs to. */
+static void platform_video_shutdown(void)
+{
+	if (!platform_window || SDL_GetCurrentThreadID() != platform_event_thread)
+		return;
+	platform_mouse_capture(FALSE);
+	if (SDL_GetWindowFlags(platform_window) & SDL_WINDOW_FULLSCREEN)
+	{
+		SDL_SetWindowFullscreen(platform_window, false);
+		SDL_SyncWindow(platform_window);
+	}
+	if (platform_gl_context)
+	{
+		SDL_GL_MakeCurrent(platform_window, NULL);
+		SDL_GL_DestroyContext(platform_gl_context);
+		platform_gl_context = NULL;
+	}
+	SDL_DestroyWindow(platform_window);
+	platform_window = NULL;
+	/* (restores the display's mode after exclusive fullscreen) */
+	SDL_QuitSubSystem(SDL_INIT_VIDEO);
+}
+
+#endif
 BOOL platform_video_initialize(unsigned long width, unsigned long height)
 {
 	int scale = (int)config_integer("display.window_scale");
@@ -479,6 +517,7 @@ BOOL platform_video_initialize(unsigned long width, unsigned long height)
 	platform_log("OpenGL %s on %s", (const char *)glGetString(GL_VERSION), (const char *)glGetString(GL_RENDERER));
 #ifndef HALO_ANDROID
 	platform_mouse_capture(TRUE);
+	atexit(platform_video_shutdown);
 #endif
 	return TRUE;
 }

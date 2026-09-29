@@ -13,8 +13,8 @@ device itself (d3d8_gl.c).
 #include "platform.h"
 #include "gl.h"
 
-#ifdef HALO_ANDROID
-/* OpenGL ES features that are optional (d3d8_gl.c gl_initialize) */
+/* features the context may lack (d3d8_gl.c gl_initialize): OpenGL ES's
+optional ones; the desktop's are all there but for atomic_counters */
 struct xgpu_capabilities
 {
 	BOOL copy_image;
@@ -23,7 +23,8 @@ struct xgpu_capabilities
 	BOOL s3tc;
 	/* ES 3.2: glDrawElementsBaseVertex */
 	BOOL base_vertex;
-	/* ES 3.1 with fragment atomic counters: exact visibility test counts */
+	/* fragment atomic counters (ES 3.1, and the desktop): exact visibility
+	test counts without occlusion queries */
 	BOOL atomic_counters;
 	/* "300 es" or "310 es" */
 	const char *shading_language;
@@ -31,6 +32,7 @@ struct xgpu_capabilities
 
 extern struct xgpu_capabilities xgpu_capabilities;
 
+#ifdef HALO_ANDROID
 /* port/android/guest/runtime/guest_host.h */
 int host_gl_has_extension(const char *name);
 unsigned int host_gl_read_buffer_word(unsigned int buffer, unsigned int offset);

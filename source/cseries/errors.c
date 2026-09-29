@@ -275,6 +275,15 @@ void error(
 		0x61,
 		priority>=0 && priority<NUMBER_OF_ERROR_MESSAGE_PRIORITIES);
 
+#ifdef HALO_LINUX
+	/* the beta build shows its silent errors on the screen too; the native
+	ports keep them to debug.txt, as the retail game did, unless
+	debug.errors_on_screen (port/linux/src/sdl_platform.c) */
+	if (priority == _error_silent && !halo_errors_on_screen())
+	{
+		priority = _error_log;
+	}
+#endif
 	if (error_globals.overflow_suppression && priority == _error_silent)
 	{
 		long time = system_milliseconds();

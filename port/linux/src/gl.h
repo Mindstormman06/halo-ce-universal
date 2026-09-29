@@ -198,7 +198,13 @@ this list to generate the guest's entry points */
 	X(glBufferSubData) \
 	X(glBufferStorage) \
 	X(glMapBufferRange) \
+	X(glFenceSync) \
+	X(glMemoryBarrier) \
+	X(glClearBufferSubData) \
+	X(glClientWaitSync) \
+	X(glDeleteSync) \
 	X(glBindBufferBase) \
+	X(glBindBufferRange) \
 	X(glGenVertexArrays) \
 	X(glBindVertexArray) \
 	X(glEnableVertexAttribArray) \
@@ -411,7 +417,13 @@ pointers, sees the declarations without these aliases */
 #define glBufferSubData halo_glBufferSubData
 #define glBufferStorage halo_glBufferStorage
 #define glMapBufferRange halo_glMapBufferRange
+#define glFenceSync halo_glFenceSync
+#define glMemoryBarrier halo_glMemoryBarrier
+#define glClearBufferSubData halo_glClearBufferSubData
+#define glClientWaitSync halo_glClientWaitSync
+#define glDeleteSync halo_glDeleteSync
 #define glBindBufferBase halo_glBindBufferBase
+#define glBindBufferRange halo_glBindBufferRange
 #define glGenVertexArrays halo_glGenVertexArrays
 #define glBindVertexArray halo_glBindVertexArray
 #define glEnableVertexAttribArray halo_glEnableVertexAttribArray

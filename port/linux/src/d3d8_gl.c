@@ -53,10 +53,10 @@ and entry points used below that ES lacks */
 #ifndef GL_CLAMP_TO_BORDER
 #define GL_CLAMP_TO_BORDER 0x812d
 #endif
+#endif
 
 /* what the context supports (gl_initialize) */
 struct xgpu_capabilities xgpu_capabilities;
-#endif
 
 /* ---------- the screen's width
 
@@ -299,10 +299,21 @@ vertices. */
 #define INDEX_BUFFER_SIZE (2 * 1024 * 1024)
 #define STREAM_BUFFER_RING 3
 #else
-#define STREAM_BUFFER_SIZE (32 * 1024 * 1024)
-#define INDEX_BUFFER_SIZE (8 * 1024 * 1024)
+/* The desktop streams into one persistently mapped buffer of each kind, a
+frame's region of it at a time, written with memcpy: a region is written
+again only once the GPU has finished the frame that last used it (a fence).
+Orphaning a large buffer every frame instead, and a glBufferSubData for
+each draw, kept NVIDIA's driver asking the kernel for memory and waiting on
+the GPU: most of every frame. */
+#define STREAM_BUFFER_SIZE (16 * 1024 * 1024)
+#define INDEX_BUFFER_SIZE (4 * 1024 * 1024)
+#define STREAM_BUFFER_RING 3
 #endif
 #define VISIBILITY_TEST_SLOTS 4096
+/* the desktop's visibility counters: a block a frame, in a ring long enough
+that the CPU has read a frame's counts before its block is cleared again */
+#define COUNTER_BLOCKS 8
+#define COUNTER_BLOCK_SIZE 2048
 #ifdef HALO_ANDROID
 #define VISIBILITY_QUERY GL_ANY_SAMPLES_PASSED
 #define VISIBILITY_ALL_SAMPLES 1000000
@@ -349,8 +360,14 @@ struct gl_device
 #ifdef HALO_ANDROID
 	GLuint stream_buffers[STREAM_BUFFER_RING];
 	GLuint index_buffers[STREAM_BUFFER_RING];
-	unsigned long buffer_ring;
+#else
+	/* the buffers' memory, mapped for good (NULL: glBufferSubData), and
+	when the GPU is done with each region */
+	unsigned char *stream_memory, *index_memory;
+	GLsync ring_fences[STREAM_BUFFER_RING];
 #endif
+	/* the region (desktop) or the buffers (Android) this frame streams into */
+	unsigned long buffer_ring;
 	unsigned long stream_offset;
 	GLuint index_buffer;
 	unsigned long index_offset;
@@ -371,6 +388,24 @@ struct gl_device
 	unsigned long counter_active;
 	unsigned long counter_of_slot[VISIBILITY_TEST_SLOTS];
 #else
+	/* with atomic counters (desktop_counters_*): each frame's tests count
+	into their own block of counters, which the CPU reads through a mapping
+	once a fence says the frame is done; until then a slot gives its last
+	count. Occlusion queries serialised NVIDIA's GPU once per test: about
+	160 lens flare tests took most of every frame. */
+	GLuint visibility_counters;
+	volatile GLuint *counter_memory;
+	unsigned long counter_next;
+	unsigned long counter_active;
+	unsigned long counter_of_slot[VISIBILITY_TEST_SLOTS];
+	unsigned long frame_of_slot[VISIBILITY_TEST_SLOTS];
+	GLuint last_count[VISIBILITY_TEST_SLOTS];
+	/* the slot's count has been read from the mapping, which is slow to
+	read: the game asks for results tens of thousands of times a second */
+	BOOL counted[VISIBILITY_TEST_SLOTS];
+	GLsync counter_fences[COUNTER_BLOCKS];
+	/* the newest frame whose counts are all written, plus one */
+	unsigned long counted_frames;
 	/* each test's latest result, which the GPU writes (as a query buffer)
 	when the test's draws are done: the game waits for results at the start
 	of the next frame, and a query would stop the CPU there until the GPU
@@ -395,7 +430,20 @@ static struct
 	unsigned long target_changes;
 	/* vertex and index bytes drawn from the mirror, and streamed */
 	unsigned long mirrored_bytes, streamed_bytes;
+	/* milliseconds between presents, the longest, and those spent in the
+	swap (waiting for the display or the GPU) */
+	double frame_milliseconds, longest_frame_milliseconds, swap_milliseconds;
+	/* ... and waiting for the GPU to finish with a stream region */
+	double ring_wait_milliseconds;
 } stats;
+
+static double stats_milliseconds(void)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (double)now.tv_sec * 1000.0 + (double)now.tv_nsec / 1000000.0;
+}
 
 static D3DDevice *device_pointer(void)
 {
@@ -950,12 +998,23 @@ static void gl_initialize(void)
 	}
 #endif
 #ifndef HALO_ANDROID
-	glGenBuffers(1, &device.stream_buffer);
-	glBindBuffer(GL_ARRAY_BUFFER, device.stream_buffer);
-	glBufferData(GL_ARRAY_BUFFER, STREAM_BUFFER_SIZE, NULL, GL_STREAM_DRAW);
-	glGenBuffers(1, &device.index_buffer);
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, device.index_buffer);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, INDEX_BUFFER_SIZE, NULL, GL_STREAM_DRAW);
+	{
+		const GLbitfield storage = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT |
+			GL_DYNAMIC_STORAGE_BIT;
+		const GLbitfield access = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+
+		glGenBuffers(1, &device.stream_buffer);
+		glBindBuffer(GL_ARRAY_BUFFER, device.stream_buffer);
+		glBufferStorage(GL_ARRAY_BUFFER, STREAM_BUFFER_SIZE * STREAM_BUFFER_RING, NULL, storage);
+		device.stream_memory = glMapBufferRange(GL_ARRAY_BUFFER, 0, STREAM_BUFFER_SIZE * STREAM_BUFFER_RING, access);
+		glGenBuffers(1, &device.index_buffer);
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, device.index_buffer);
+		glBufferStorage(GL_ELEMENT_ARRAY_BUFFER, INDEX_BUFFER_SIZE * STREAM_BUFFER_RING, NULL, storage);
+		device.index_memory = glMapBufferRange(GL_ELEMENT_ARRAY_BUFFER, 0, INDEX_BUFFER_SIZE * STREAM_BUFFER_RING,
+			access);
+		if (!device.stream_memory || !device.index_memory)
+			platform_log("cannot map the stream buffers; uploading into them instead");
+	}
 #endif
 	glGenSamplers(D3DTSS_MAXSTAGES, device.samplers);
 	glGenQueries(VISIBILITY_TEST_SLOTS, device.queries);
@@ -968,6 +1027,20 @@ static void gl_initialize(void)
 		GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
 	if (!device.visibility_results)
 		platform_log("cannot map the visibility test results; tests wait for the GPU");
+	{
+		static const GLuint zeros[COUNTER_BLOCKS * COUNTER_BLOCK_SIZE];
+
+		glGenBuffers(1, &device.visibility_counters);
+		glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, device.visibility_counters);
+		glBufferStorage(GL_ATOMIC_COUNTER_BUFFER, sizeof(zeros), zeros,
+			GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
+		device.counter_memory = glMapBufferRange(GL_ATOMIC_COUNTER_BUFFER, 0, sizeof(zeros),
+			GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
+		glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, 0);
+		xgpu_capabilities.atomic_counters = device.counter_memory != NULL;
+		if (!device.counter_memory)
+			platform_log("cannot map the visibility counters; occlusion queries instead");
+	}
 #endif
 #ifdef HALO_ANDROID
 	if (xgpu_capabilities.atomic_counters)
@@ -1365,6 +1438,16 @@ void WINAPI D3DDevice_BeginVisibilityTest(void)
 		return;
 	/* the query object is chosen when the test ends; use a scratch one */
 	device.visibility_test_active = TRUE;
+#ifndef HALO_ANDROID
+	if (xgpu_capabilities.atomic_counters)
+	{
+		/* the next counter of this frame's block, zeroed when the block
+		was cleared (desktop_counters_end_frame) */
+		device.counter_active = (device.frame % COUNTER_BLOCKS) * COUNTER_BLOCK_SIZE +
+			device.counter_next++ % COUNTER_BLOCK_SIZE;
+		return;
+	}
+#endif
 #ifdef HALO_ANDROID
 	if (xgpu_capabilities.atomic_counters)
 	{
@@ -1396,6 +1479,17 @@ HRESULT WINAPI D3DDevice_EndVisibilityTest(DWORD index)
 	if (xgpu_capabilities.atomic_counters)
 	{
 		device.counter_of_slot[index] = device.counter_active;
+		device.query_pending[index] = TRUE;
+		return S_OK;
+	}
+#endif
+#ifndef HALO_ANDROID
+	if (xgpu_capabilities.atomic_counters)
+	{
+		device.query_area[index] = target_scale[0] * target_scale[1];
+		device.counter_of_slot[index] = device.counter_active;
+		device.frame_of_slot[index] = device.frame;
+		device.counted[index] = FALSE;
 		device.query_pending[index] = TRUE;
 		return S_OK;
 	}
@@ -1460,6 +1554,21 @@ HRESULT WINAPI D3DDevice_GetVisibilityTestResult(DWORD index, UINT *result, ULON
 	}
 #endif
 #ifndef HALO_ANDROID
+	if (xgpu_capabilities.atomic_counters)
+	{
+		/* the test's count once its frame is done (and before its block is
+		cleared again), otherwise the slot's last */
+		unsigned long frame = device.frame_of_slot[index];
+
+		if (!device.counted[index] && frame < device.counted_frames && device.frame - frame < COUNTER_BLOCKS - 1)
+		{
+			device.last_count[index] = device.counter_memory[device.counter_of_slot[index]];
+			device.counted[index] = TRUE;
+		}
+		if (result)
+			*result = visibility_unscaled(device.last_count[index], index);
+		return S_OK;
+	}
 	if (device.visibility_results)
 	{
 		/* the latest count the GPU has written: from this test, or while
@@ -2526,9 +2635,7 @@ static struct program_entry *prepare_draw(BOOL immediate)
 	key.alpha_test_function = D3D__RenderState[D3DRS_ALPHATESTENABLE] ? D3D__RenderState[D3DRS_ALPHAFUNC] : 0;
 	key.fog_enable = D3D__RenderState[D3DRS_FOGENABLE] != 0;
 	key.fog_table_mode = (unsigned char)D3D__RenderState[D3DRS_FOGTABLEMODE];
-#ifdef HALO_ANDROID
 	key.count_samples = device.visibility_test_active && xgpu_capabilities.atomic_counters;
-#endif
 
 	entry = program_get(vertex_shader_get(program, immediate), fragment_shader_get(&key));
 	if (!entry)
@@ -2543,11 +2650,9 @@ static struct program_entry *prepare_draw(BOOL immediate)
 	else
 		stats.draws++;
 	state_program(entry->program);
-#ifdef HALO_ANDROID
 	if (key.count_samples)
 		glBindBufferRange(GL_ATOMIC_COUNTER_BUFFER, 0, device.visibility_counters,
 			(GLintptr)(device.counter_active * sizeof(GLuint)), sizeof(GLuint));
-#endif
 
 	if (entry->constants >= 0 && entry->constants_serial != constants_serial)
 	{
@@ -3031,18 +3136,88 @@ static void index_extent(const WORD *indices, unsigned long count, unsigned long
 
 /* ---------- vertex data */
 
-/* makes room for size bytes of uploads, orphaning the stream buffer if it
-is full. A draw reserves room for all of its streams at once: orphaning
-between two of them would leave the attributes already pointed at the
-buffer reading its new, empty storage. */
+#ifndef HALO_ANDROID
+/* after a frame's draws: a fence for its visibility counts, the frames the
+GPU has finished noted (without waiting), and the next frame's block of
+counters cleared */
+static void desktop_counters_end_frame(void)
+{
+	static const GLuint zero = 0;
+	GLsync *fence = &device.counter_fences[device.frame % COUNTER_BLOCKS];
+
+	/* (the counters' writes, seen through the mapping) */
+	glMemoryBarrier(GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
+	if (*fence)
+		glDeleteSync(*fence);
+	*fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+	while (device.counted_frames <= device.frame)
+	{
+		GLsync *done = &device.counter_fences[device.counted_frames % COUNTER_BLOCKS];
+		GLenum status;
+
+		/* (frames before the counters had none) */
+		if (!*done)
+		{
+			device.counted_frames++;
+			continue;
+		}
+		status = glClientWaitSync(*done, 0, 0);
+		if (status != GL_ALREADY_SIGNALED && status != GL_CONDITION_SATISFIED)
+			break;
+		glDeleteSync(*done);
+		*done = NULL;
+		device.counted_frames++;
+	}
+	glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, device.visibility_counters);
+	glClearBufferSubData(GL_ATOMIC_COUNTER_BUFFER, GL_R32UI,
+		(GLintptr)(((device.frame + 1) % COUNTER_BLOCKS) * COUNTER_BLOCK_SIZE * sizeof(GLuint)),
+		COUNTER_BLOCK_SIZE * sizeof(GLuint), GL_RED_INTEGER, GL_UNSIGNED_INT, &zero);
+	glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, 0);
+	device.counter_next = 0;
+}
+
+/* the next region of the stream buffers, once the GPU has finished the
+draws that last read it: after each frame, and when a frame fills one */
+static void stream_ring_advance(void)
+{
+	GLsync *fence;
+
+	device.ring_fences[device.buffer_ring] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+	device.buffer_ring = (device.buffer_ring + 1) % STREAM_BUFFER_RING;
+	fence = &device.ring_fences[device.buffer_ring];
+	if (*fence)
+	{
+		double before = debug_settings.statistics ? stats_milliseconds() : 0.0;
+
+		while (glClientWaitSync(*fence, GL_SYNC_FLUSH_COMMANDS_BIT, 100000000) == GL_TIMEOUT_EXPIRED)
+			;
+		if (debug_settings.statistics)
+			stats.ring_wait_milliseconds += stats_milliseconds() - before;
+		glDeleteSync(*fence);
+		*fence = NULL;
+	}
+	device.stream_offset = 0;
+	device.index_offset = 0;
+}
+
+#endif
+/* makes room for size bytes of uploads, orphaning the stream buffer (or on
+the desktop moving to its next region) if it is full. A draw reserves room
+for all of its streams at once: orphaning between two of them would leave
+the attributes already pointed at the buffer reading its new, empty
+storage. */
 static void stream_reserve(unsigned long size)
 {
 	if (device.stream_offset + size > STREAM_BUFFER_SIZE)
 	{
+#ifdef HALO_ANDROID
 		/* orphan the buffer and start again */
 		state_array_buffer(device.stream_buffer);
 		glBufferData(GL_ARRAY_BUFFER, STREAM_BUFFER_SIZE, NULL, GL_STREAM_DRAW);
 		device.stream_offset = 0;
+#else
+		stream_ring_advance();
+#endif
 	}
 }
 
@@ -3057,7 +3232,11 @@ static unsigned long stream_upload(const void *data, unsigned long size)
 #ifdef HALO_ANDROID
 	host_gl_buffer_write(GL_ARRAY_BUFFER, (unsigned int)offset, (unsigned int)size, data);
 #else
-	glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)offset, (GLsizeiptr)size, data);
+	offset += device.buffer_ring * STREAM_BUFFER_SIZE;
+	if (device.stream_memory)
+		memcpy(device.stream_memory + offset, data, size);
+	else
+		glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)offset, (GLsizeiptr)size, data);
 #endif
 	device.stream_offset += size;
 	return offset;
@@ -3113,14 +3292,24 @@ static unsigned long index_upload(const void *data, unsigned long size)
 	state_element_array_buffer(device.index_buffer);
 	if (device.index_offset + size > INDEX_BUFFER_SIZE)
 	{
+#ifdef HALO_ANDROID
 		glBufferData(GL_ELEMENT_ARRAY_BUFFER, INDEX_BUFFER_SIZE, NULL, GL_STREAM_DRAW);
 		device.index_offset = 0;
+#else
+		/* (what this frame streamed before stays where it is: a region
+		is only written again after its fence) */
+		stream_ring_advance();
+#endif
 	}
 	offset = device.index_offset;
 #ifdef HALO_ANDROID
 	host_gl_buffer_write(GL_ELEMENT_ARRAY_BUFFER, (unsigned int)offset, (unsigned int)size, data);
 #else
-	glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, (GLintptr)offset, (GLsizeiptr)size, data);
+	offset += device.buffer_ring * INDEX_BUFFER_SIZE;
+	if (device.index_memory)
+		memcpy(device.index_memory + offset, data, size);
+	else
+		glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, (GLintptr)offset, (GLsizeiptr)size, data);
 #endif
 	device.index_offset += size;
 	return offset;
@@ -3666,7 +3855,26 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		overlay_draw(window_width, window_height);
 		glBindVertexArray(device.vertex_array);
 #endif
-		platform_video_swap();
+		if (debug_settings.statistics)
+		{
+			static double last_present;
+			double before = stats_milliseconds(), after;
+
+			platform_video_swap();
+			after = stats_milliseconds();
+			stats.swap_milliseconds += after - before;
+			if (last_present > 0.0)
+			{
+				stats.frame_milliseconds += after - last_present;
+				if (after - last_present > stats.longest_frame_milliseconds)
+					stats.longest_frame_milliseconds = after - last_present;
+			}
+			last_present = after;
+		}
+		else
+		{
+			platform_video_swap();
+		}
 		xgpu_gl_state_invalidate();
 		xgpu_texture_cache_begin_frame();
 #ifdef HALO_ANDROID
@@ -3678,8 +3886,9 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 		device.stream_offset = 0;
 		device.index_offset = 0;
 #else
-		device.stream_offset = STREAM_BUFFER_SIZE; /* orphan next frame */
-		device.index_offset = INDEX_BUFFER_SIZE;
+		if (xgpu_capabilities.atomic_counters)
+			desktop_counters_end_frame();
+		stream_ring_advance();
 #endif
 	}
 	device.frame++;
@@ -3691,6 +3900,9 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 			device.frame, stats.draws / stats.presents, stats.immediate_draws / stats.presents, stats.clears / stats.presents,
 			stats.target_changes / stats.presents, stats.skipped_no_program, stats.skipped_no_target, stats.skipped_link,
 			stats.mirrored_bytes / stats.presents / 1024, stats.streamed_bytes / stats.presents / 1024);
+		platform_log("frame %lu: %.2f ms a frame, the longest %.2f ms; %.2f ms of it in the swap, %.2f waiting for "
+			"the GPU", device.frame, stats.frame_milliseconds / stats.presents, stats.longest_frame_milliseconds,
+			stats.swap_milliseconds / stats.presents, stats.ring_wait_milliseconds / stats.presents);
 		memset(&stats, 0, sizeof(stats));
 	}
 	platform_pump_events();

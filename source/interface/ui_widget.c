@@ -5795,6 +5795,18 @@ static void widget_instance_render_recursive(
 				alpha_modifier;
 		}
 		color = modulate_pixel32_by_real_alpha(0xFFFFFFFF, alpha);
+#ifdef HALO_LINUX
+		/* a background over the whole 640x480 screen made of a small bitmap
+		(a fill, like the pause menu's dimming, not a picture) covers the
+		whole of a wider screen, around the centered 640 columns */
+		if (bounds.x0 <= 0 && bounds.x1 >= 640 && bounds.y0 <= 0 && bounds.y1 >= 480 &&
+			bitmap->width <= 128 && bitmap->height <= 128 && halo_screen_width() > 640)
+		{
+			bounds.x0 -= (short)((halo_screen_width() - 640) / 2);
+			bounds.x1 += (short)((halo_screen_width() - 640) / 2);
+			clip = NULL;
+		}
+#endif
 		draw_bitmap_in_rect(
 			bitmap,
 			&bounds,

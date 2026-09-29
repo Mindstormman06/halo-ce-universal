@@ -23,6 +23,9 @@ struct observer_result;
 struct render_camera;
 struct real_matrix4x3;
 int halo_interpolation_enabled(void);
+/* whether the game's silent errors show on the screen as well as in
+debug.txt (port/linux/src/sdl_platform.c) */
+int halo_errors_on_screen(void);
 float game_time_get_tick_fraction(void);
 void render_interpolation_tick(void);
 void render_interpolation_frame_begin(void);
