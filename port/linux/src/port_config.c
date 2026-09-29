@@ -112,6 +112,26 @@ static const struct config_setting config_settings[] =
 		"How far the view turns for the mouse's movement." },
 	{ "input.invert_mouse", _config_boolean, "false", "HALO_MOUSE_INVERT", _environment_set_is_true, _platform_desktop,
 		"Moving the mouse forward looks down." },
+#define KEY_SETTING(name, environment, default_name, action) \
+	{ "input.key_" name, _config_string, "\"" default_name "\"", environment, _environment_value, _platform_desktop, \
+		"The key or mouse button that " action ": a key as the settings overlay\n" \
+		"(F10, KEYBINDS) names it, \"Left Mouse\", \"Middle Mouse\", \"Right Mouse\",\n" \
+		"\"Mouse 4\" or \"Mouse 5\"; empty for none." }
+	KEY_SETTING("move_forward", "HALO_KEY_MOVE_FORWARD", "W", "walks forward"),
+	KEY_SETTING("move_back", "HALO_KEY_MOVE_BACK", "S", "walks backward"),
+	KEY_SETTING("move_left", "HALO_KEY_MOVE_LEFT", "A", "steps left"),
+	KEY_SETTING("move_right", "HALO_KEY_MOVE_RIGHT", "D", "steps right"),
+	KEY_SETTING("jump", "HALO_KEY_JUMP", "Space", "jumps"),
+	KEY_SETTING("melee", "HALO_KEY_MELEE", "F", "strikes with the weapon"),
+	KEY_SETTING("action", "HALO_KEY_ACTION", "E", "reloads, picks up and uses"),
+	KEY_SETTING("switch_weapon", "HALO_KEY_SWITCH_WEAPON", "Tab", "changes weapon"),
+	KEY_SETTING("flashlight", "HALO_KEY_FLASHLIGHT", "Q", "switches the flashlight"),
+	KEY_SETTING("switch_grenade", "HALO_KEY_SWITCH_GRENADE", "X", "changes the kind of grenade"),
+	KEY_SETTING("throw_grenade", "HALO_KEY_THROW_GRENADE", "Right Mouse", "throws a grenade"),
+	KEY_SETTING("fire", "HALO_KEY_FIRE", "Left Mouse", "fires the weapon"),
+	KEY_SETTING("crouch", "HALO_KEY_CROUCH", "Left Ctrl", "crouches"),
+	KEY_SETTING("zoom", "HALO_KEY_ZOOM", "Middle Mouse", "zooms"),
+#undef KEY_SETTING
 
 	{ "game.language", _config_string, "\"\"", "HALO_LANGUAGE", _environment_value, _platform_all,
 		"The language the game asks the Xbox for: \"ja\", \"de\", \"fr\", \"es\" or \"it\";\n"

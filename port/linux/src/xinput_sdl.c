@@ -6,14 +6,15 @@ Xbox controllers and the debug keyboard for the Linux build.
 Port 0 is always connected: it is the keyboard and mouse, merged with the
 first SDL gamepad when one is present. Further SDL gamepads take ports 1-3.
 
-Keyboard and mouse (port 0):
+Keyboard and mouse (port 0), as bound (input_bindings.h; the settings
+overlay's KEYBINDS tab changes them), with the defaults:
 	W A S D          left stick          arrows           D-pad
 	mouse            aim (see halo_linux_mouse_look)
-	left button      right trigger       right button, G  left trigger
-	space, enter     A                   F, backspace, X1 B
-	E, R             X                   tab, wheel       Y
+	left button      right trigger       right button     left trigger
+	space, enter     A                   F, backspace     B
+	E                X                   tab, wheel       Y
 	Q                white               X                black
-	left ctrl, C     left stick click    Z, middle button right stick click
+	left ctrl        left stick click    middle button    right stick click
 	escape           start               F1               back
 	F12              release or recapture the mouse
 
@@ -38,12 +39,14 @@ it types into it instead (port/linux/include/halo_text_input.h).
 #include "platform.h"
 #include "sdl_platform.h"
 #include "port_config.h"
+#include "input_bindings.h"
 #ifndef HALO_ANDROID
 #include "overlay.h"
 #endif
 
 #include <SDL3/SDL.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -145,6 +148,155 @@ static void mouse_poll(const struct platform_input_state *input)
 	pthread_mutex_unlock(&mouse_lock);
 }
 
+/* ---------- bindings (input_bindings.h) */
+
+static const struct
+{
+	const char *setting, *label, *help, *default_name;
+} input_actions[NUMBER_OF_INPUT_ACTIONS] =
+{
+	{ "input.key_move_forward", "Move forward", "Walks forward, and pushes the menus' focus up.", "W" },
+	{ "input.key_move_back", "Move back", "Walks backward, and pushes the menus' focus down.", "S" },
+	{ "input.key_move_left", "Move left", "Steps to the left.", "A" },
+	{ "input.key_move_right", "Move right", "Steps to the right.", "D" },
+	{ "input.key_jump", "Jump", "Jumps. In the menus, chooses: A.", "Space" },
+	{ "input.key_melee", "Melee", "Strikes with the weapon. In the menus, goes back: B.", "F" },
+	{ "input.key_action", "Action, reload", "Reloads, picks up, gets into a vehicle, and presses switches: X.", "E" },
+	{ "input.key_switch_weapon", "Switch weapon", "Changes to the other weapon. The mouse wheel also does.", "Tab" },
+	{ "input.key_flashlight", "Flashlight", "Switches the flashlight.", "Q" },
+	{ "input.key_switch_grenade", "Switch grenade", "Changes the kind of grenade.", "X" },
+	{ "input.key_throw_grenade", "Throw grenade", "Throws a grenade.", "Right Mouse" },
+	{ "input.key_fire", "Fire", "Fires the weapon.", "Left Mouse" },
+	{ "input.key_crouch", "Crouch", "Crouches.", "Left Ctrl" },
+	{ "input.key_zoom", "Zoom", "Zooms a weapon that zooms, and switches the vision of a vehicle.", "Middle Mouse" },
+};
+
+/* in the order of SDL_BUTTON_LEFT */
+static const char *const mouse_binding_names[] =
+	{ "Left Mouse", "Middle Mouse", "Right Mouse", "Mouse 4", "Mouse 5" };
+#define MOUSE_BINDING_COUNT ((int)(sizeof(mouse_binding_names) / sizeof(mouse_binding_names[0])))
+
+const char *input_action_label(enum input_action action)
+{
+	return input_actions[action].label;
+}
+
+const char *input_action_help(enum input_action action)
+{
+	return input_actions[action].help;
+}
+
+const char *input_action_setting(enum input_action action)
+{
+	return input_actions[action].setting;
+}
+
+static int binding_from_name(const char *name)
+{
+	int index;
+
+	for (index = 0; index < MOUSE_BINDING_COUNT; index++)
+	{
+		if (!SDL_strcasecmp(name, mouse_binding_names[index]))
+			return INPUT_BINDING_MOUSE + index + 1;
+	}
+	return name[0] ? (int)SDL_GetScancodeFromName(name) : 0;
+}
+
+void input_binding_name(int binding, char *name, size_t size)
+{
+	const char *text = NULL;
+
+	if (binding >= INPUT_BINDING_MOUSE)
+	{
+		int index = binding - INPUT_BINDING_MOUSE - 1;
+
+		if (index >= 0 && index < MOUSE_BINDING_COUNT)
+			text = mouse_binding_names[index];
+	}
+	else if (binding > 0 && binding < SDL_SCANCODE_COUNT)
+	{
+		text = SDL_GetScancodeName((SDL_Scancode)binding);
+	}
+	snprintf(name, size, "%s", text && text[0] ? text : "None");
+}
+
+int input_binding_allowed(int binding)
+{
+	if (binding >= INPUT_BINDING_MOUSE)
+		return binding - INPUT_BINDING_MOUSE >= 1 && binding - INPUT_BINDING_MOUSE <= MOUSE_BINDING_COUNT;
+	if (binding <= 0 || binding >= SDL_SCANCODE_COUNT)
+		return FALSE;
+	/* (the overlay's, the fullscreen's, and the menus' start) */
+	if (binding == SDL_SCANCODE_F10 || binding == SDL_SCANCODE_F11 || binding == SDL_SCANCODE_ESCAPE)
+		return FALSE;
+	return SDL_GetScancodeName((SDL_Scancode)binding)[0] != 0;
+}
+
+/* the bindings as last set, asked for once each frame or so: not looked up
+in the settings every time */
+static int bindings[NUMBER_OF_INPUT_ACTIONS];
+static BOOL bindings_loaded = FALSE;
+
+int input_binding_default(enum input_action action)
+{
+	return binding_from_name(input_actions[action].default_name);
+}
+
+static void bindings_load(void)
+{
+	int action;
+
+	for (action = 0; action < NUMBER_OF_INPUT_ACTIONS; action++)
+	{
+#ifdef HALO_ANDROID
+		bindings[action] = input_binding_default((enum input_action)action);
+#else
+		int binding = binding_from_name(config_string(input_actions[action].setting));
+
+		bindings[action] = input_binding_allowed(binding) ? binding : 0;
+#endif
+	}
+	bindings_loaded = TRUE;
+}
+
+int input_binding(enum input_action action)
+{
+	if (!bindings_loaded)
+		bindings_load();
+	return bindings[action];
+}
+
+int input_binding_set(enum input_action action, int binding)
+{
+	int other, swapped = -1, previous = input_binding(action);
+	char name[64];
+
+	if (!input_binding_allowed(binding))
+		return -1;
+	for (other = 0; other < NUMBER_OF_INPUT_ACTIONS; other++)
+	{
+		if (other != (int)action && bindings[other] == binding)
+		{
+			bindings[other] = previous;
+			swapped = other;
+		}
+	}
+	bindings[action] = binding;
+#ifndef HALO_ANDROID
+	input_binding_name(binding, name, sizeof(name));
+	config_set_string(input_actions[action].setting, name);
+	if (swapped >= 0)
+	{
+		input_binding_name(previous, name, sizeof(name));
+		config_set_string(input_actions[swapped].setting, previous ? name : "");
+	}
+#else
+	(void)name;
+#endif
+	return swapped;
+}
+
 /* ---------- keyboard and mouse as a controller */
 
 static BYTE analog(BOOL down)
@@ -152,17 +304,29 @@ static BYTE analog(BOOL down)
 	return down ? 0xff : 0x00;
 }
 
+/* whether the key or mouse button bound to the action is down */
+static BOOL bound(const struct platform_input_state *input, enum input_action action)
+{
+	int binding = input_binding(action);
+
+	if (binding >= INPUT_BINDING_MOUSE)
+	{
+		int button = binding - INPUT_BINDING_MOUSE;
+
+		return !input->mouse_released && button < PLATFORM_MOUSE_BUTTON_COUNT && input->mouse_buttons[button];
+	}
+	return binding > 0 && binding < SDL_SCANCODE_COUNT && input->keys[binding];
+}
+
 static void keyboard_gamepad(const struct platform_input_state *input, XINPUT_GAMEPAD *pad)
 {
 	const unsigned char *k = input->keys;
-	BOOL mouse = !input->mouse_released;
-	const unsigned char *m = input->mouse_buttons;
 	int x = 0, y = 0;
 
-	if (k[SDL_SCANCODE_D]) x++;
-	if (k[SDL_SCANCODE_A]) x--;
-	if (k[SDL_SCANCODE_W]) y++;
-	if (k[SDL_SCANCODE_S]) y--;
+	if (bound(input, _action_move_right)) x++;
+	if (bound(input, _action_move_left)) x--;
+	if (bound(input, _action_move_forward)) y++;
+	if (bound(input, _action_move_back)) y--;
 	if (x || y)
 	{
 		/* full deflection, diagonals on the unit circle */
@@ -178,23 +342,23 @@ static void keyboard_gamepad(const struct platform_input_state *input, XINPUT_GA
 	if (k[SDL_SCANCODE_RIGHT]) pad->wButtons |= XINPUT_GAMEPAD_DPAD_RIGHT;
 	if (k[SDL_SCANCODE_ESCAPE]) pad->wButtons |= XINPUT_GAMEPAD_START;
 	if (k[SDL_SCANCODE_F1]) pad->wButtons |= XINPUT_GAMEPAD_BACK;
-	if (k[SDL_SCANCODE_LCTRL] || k[SDL_SCANCODE_C]) pad->wButtons |= XINPUT_GAMEPAD_LEFT_THUMB;
-	if (k[SDL_SCANCODE_Z] || (mouse && m[SDL_BUTTON_MIDDLE])) pad->wButtons |= XINPUT_GAMEPAD_RIGHT_THUMB;
+	if (bound(input, _action_crouch)) pad->wButtons |= XINPUT_GAMEPAD_LEFT_THUMB;
+	if (bound(input, _action_zoom)) pad->wButtons |= XINPUT_GAMEPAD_RIGHT_THUMB;
 
-	pad->bAnalogButtons[XINPUT_GAMEPAD_A] |= analog(k[SDL_SCANCODE_SPACE] || k[SDL_SCANCODE_RETURN] ||
+	pad->bAnalogButtons[XINPUT_GAMEPAD_A] |= analog(bound(input, _action_jump) || k[SDL_SCANCODE_RETURN] ||
 		k[SDL_SCANCODE_KP_ENTER]);
-	pad->bAnalogButtons[XINPUT_GAMEPAD_B] |= analog(k[SDL_SCANCODE_F] || k[SDL_SCANCODE_BACKSPACE] ||
-		(mouse && m[SDL_BUTTON_X1]));
+	pad->bAnalogButtons[XINPUT_GAMEPAD_B] |= analog(bound(input, _action_melee) || k[SDL_SCANCODE_BACKSPACE]);
 #ifdef HALO_ANDROID
 	/* the system back key (gesture or button) backs out of menus */
 	pad->bAnalogButtons[XINPUT_GAMEPAD_B] |= analog(k[SDL_SCANCODE_AC_BACK]);
 #endif
-	pad->bAnalogButtons[XINPUT_GAMEPAD_X] |= analog(k[SDL_SCANCODE_E] || k[SDL_SCANCODE_R]);
-	pad->bAnalogButtons[XINPUT_GAMEPAD_Y] |= analog(k[SDL_SCANCODE_TAB] || SDL_GetTicks() < wheel_press_until_ms);
-	pad->bAnalogButtons[XINPUT_GAMEPAD_WHITE] |= analog(k[SDL_SCANCODE_Q]);
-	pad->bAnalogButtons[XINPUT_GAMEPAD_BLACK] |= analog(k[SDL_SCANCODE_X]);
-	pad->bAnalogButtons[XINPUT_GAMEPAD_LEFT_TRIGGER] |= analog(k[SDL_SCANCODE_G] || (mouse && m[SDL_BUTTON_RIGHT]));
-	pad->bAnalogButtons[XINPUT_GAMEPAD_RIGHT_TRIGGER] |= analog(mouse && m[SDL_BUTTON_LEFT]);
+	pad->bAnalogButtons[XINPUT_GAMEPAD_X] |= analog(bound(input, _action_action));
+	pad->bAnalogButtons[XINPUT_GAMEPAD_Y] |= analog(bound(input, _action_switch_weapon) ||
+		SDL_GetTicks() < wheel_press_until_ms);
+	pad->bAnalogButtons[XINPUT_GAMEPAD_WHITE] |= analog(bound(input, _action_flashlight));
+	pad->bAnalogButtons[XINPUT_GAMEPAD_BLACK] |= analog(bound(input, _action_switch_grenade));
+	pad->bAnalogButtons[XINPUT_GAMEPAD_LEFT_TRIGGER] |= analog(bound(input, _action_throw_grenade));
+	pad->bAnalogButtons[XINPUT_GAMEPAD_RIGHT_TRIGGER] |= analog(bound(input, _action_fire));
 }
 
 /* A scroll of the wheel switches weapons once: it holds Y for WHEEL_PRESS_MS

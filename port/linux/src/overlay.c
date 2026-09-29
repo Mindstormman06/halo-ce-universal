@@ -24,6 +24,7 @@ window's pixels, in units that grow with the window.
 #include "sdl_platform.h"
 #include "gl.h"
 #include "port_config.h"
+#include "input_bindings.h"
 #include "overlay.h"
 #include "overlay_font.h"
 
@@ -41,6 +42,7 @@ enum overlay_tab
 	_tab_display,
 	_tab_audio,
 	_tab_controls,
+	_tab_keybinds,
 	NUMBER_OF_TABS
 };
 
@@ -50,6 +52,8 @@ enum item_kind
 	_kind_choice,
 	_kind_toggle,
 	_kind_slider,
+	/* a key or mouse button, chosen by pressing it */
+	_kind_bind,
 };
 
 enum overlay_item
@@ -67,7 +71,9 @@ enum overlay_item
 	_item_dialog_volume,
 	_item_mouse_sensitivity,
 	_item_invert_mouse,
-	NUMBER_OF_ITEMS
+	/* one for each input_action */
+	_item_bind_first,
+	NUMBER_OF_ITEMS = _item_bind_first + NUMBER_OF_INPUT_ACTIONS
 };
 
 struct item_definition
@@ -116,9 +122,13 @@ static const struct item_definition items[NUMBER_OF_ITEMS] =
 		"How far the view turns for the mouse's movement.", 0.1f, 5.0f, 0.1f },
 	{ _tab_controls, _kind_toggle, "input.invert_mouse", "Invert mouse",
 		"Moving the mouse forward looks down." },
+#define BIND_ITEM { _tab_keybinds, _kind_bind }
+	BIND_ITEM, BIND_ITEM, BIND_ITEM, BIND_ITEM, BIND_ITEM, BIND_ITEM, BIND_ITEM,
+	BIND_ITEM, BIND_ITEM, BIND_ITEM, BIND_ITEM, BIND_ITEM, BIND_ITEM, BIND_ITEM,
+#undef BIND_ITEM
 };
 
-static const char *const tab_names[NUMBER_OF_TABS] = { "DISPLAY", "AUDIO", "CONTROLS" };
+static const char *const tab_names[NUMBER_OF_TABS] = { "DISPLAY", "AUDIO", "CONTROLS", "KEYBINDS" };
 static const char *const render_scale_settings[] = { "native", "integer", "original" };
 static const char *const render_scale_names[] = { "Native", "Whole multiple", "Original (480p)" };
 /* in the order of enum platform_display_mode */
@@ -127,7 +137,9 @@ static const char *const display_mode_names[] = { "Fullscreen", "Borderless", "W
 
 /* ---------- layout */
 
-#define MAXIMUM_ROWS 8
+#define MAXIMUM_ROWS 16
+/* the keybinds fill two columns of this many rows */
+#define KEYBIND_ROWS_PER_COLUMN 7
 
 struct box
 {
@@ -163,6 +175,8 @@ static struct
 	BOOL quit_armed;
 	/* the item a slider is dragged of, or -1 */
 	int dragging;
+	/* the item waiting for a key or mouse button, or -1 */
+	int listening;
 
 	/* choices are indices, toggles 0 or 1 */
 	float values[NUMBER_OF_ITEMS];
@@ -186,7 +200,7 @@ static struct
 	int frames_per_second;
 	Uint64 hint_until;
 	BOOL hint_checked;
-} overlay = { FALSE, _tab_display, 0, FALSE, -1 };
+} overlay = { FALSE, _tab_display, 0, FALSE, -1, -1 };
 
 BOOL overlay_is_open(void)
 {
@@ -244,6 +258,18 @@ static void slider_text(enum overlay_item item, char *text, size_t size)
 static float clampf(float value, float minimum, float maximum)
 {
 	return value < minimum ? minimum : value > maximum ? maximum : value;
+}
+
+static const char *item_label(enum overlay_item item)
+{
+	return items[item].kind == _kind_bind ? input_action_label((enum input_action)(item - _item_bind_first)) :
+		items[item].label;
+}
+
+static const char *item_help(enum overlay_item item)
+{
+	return items[item].kind == _kind_bind ? input_action_help((enum input_action)(item - _item_bind_first)) :
+		items[item].help;
 }
 
 /* the window heights offered, and which is the window's: the largest no
@@ -366,14 +392,21 @@ static void overlay_save(void)
 			written = config_write_string(items[item].setting, render_scale_settings[(int)value]);
 			break;
 		default:
-			if (items[item].kind == _kind_toggle)
+			if (items[item].kind == _kind_bind)
+			{
+				const char *setting = input_action_setting((enum input_action)(item - _item_bind_first));
+
+				written = config_write_string(setting, config_string(setting));
+			}
+			else if (items[item].kind == _kind_toggle)
 				written = config_write_boolean(items[item].setting, value != 0.0f);
 			else
 				written = config_write_real(items[item].setting, value);
 			break;
 		}
 		if (!written)
-			platform_log("settings: cannot write %s", items[item].setting);
+			platform_log("settings: cannot write %s", items[item].kind == _kind_bind ?
+				input_action_setting((enum input_action)(item - _item_bind_first)) : items[item].setting);
 	}
 }
 
@@ -411,7 +444,24 @@ static void item_step(enum overlay_item item, int direction)
 	case _kind_slider:
 		item_set(item, overlay.values[item] + (float)direction * items[item].step);
 		break;
+	case _kind_bind:
+		break;
 	}
+}
+
+/* gives the item's action the binding */
+static void item_bind(enum overlay_item item, int binding)
+{
+	int swapped = input_binding_set((enum input_action)(item - _item_bind_first), binding);
+
+	overlay.unsaved[item] = TRUE;
+	if (swapped >= 0)
+		overlay.unsaved[_item_bind_first + swapped] = TRUE;
+}
+
+static void item_bind_default(enum overlay_item item)
+{
+	item_bind(item, input_binding_default((enum input_action)(item - _item_bind_first)));
 }
 
 /* enter, or a click on its label */
@@ -430,6 +480,9 @@ static void item_activate(enum overlay_item item)
 		item_set(item, overlay.values[item] != 0.0f ? 0.0f : 1.0f);
 		break;
 	case _kind_slider:
+		break;
+	case _kind_bind:
+		overlay.listening = (int)item;
 		break;
 	}
 }
@@ -496,11 +549,26 @@ static void overlay_layout(struct overlay_layout *layout)
 		if (items[item].tab != overlay.tab || row >= MAXIMUM_ROWS)
 			continue;
 		layout->row_items[row] = item;
-		layout->rows[row] = make_box(layout->panel.x + 24.0f * unit, layout->panel.y + (122.0f + 46.0f * row) * unit,
-			right - layout->panel.x - 24.0f * unit, 42.0f * unit);
-		control = &layout->controls[row];
-		*control = make_box(right - 20.0f * unit - 300.0f * unit,
-			layout->rows[row].y + (layout->rows[row].height - 30.0f * unit) / 2.0f, 300.0f * unit, 30.0f * unit);
+		if (items[item].kind == _kind_bind)
+		{
+			/* two columns */
+			float width = (right - layout->panel.x - 24.0f * unit - 16.0f * unit) / 2.0f;
+			int column = row / KEYBIND_ROWS_PER_COLUMN;
+
+			layout->rows[row] = make_box(layout->panel.x + 24.0f * unit + column * (width + 16.0f * unit),
+				layout->panel.y + (122.0f + 46.0f * (row % KEYBIND_ROWS_PER_COLUMN)) * unit, width, 42.0f * unit);
+			control = &layout->controls[row];
+			*control = make_box(layout->rows[row].x + width - 12.0f * unit - 140.0f * unit,
+				layout->rows[row].y + (layout->rows[row].height - 30.0f * unit) / 2.0f, 140.0f * unit, 30.0f * unit);
+		}
+		else
+		{
+			layout->rows[row] = make_box(layout->panel.x + 24.0f * unit,
+				layout->panel.y + (122.0f + 46.0f * row) * unit, right - layout->panel.x - 24.0f * unit, 42.0f * unit);
+			control = &layout->controls[row];
+			*control = make_box(right - 20.0f * unit - 300.0f * unit,
+				layout->rows[row].y + (layout->rows[row].height - 30.0f * unit) / 2.0f, 300.0f * unit, 30.0f * unit);
+		}
 		layout->tracks[row] = make_box(control->x + 9.0f * unit, control->y + control->height / 2.0f - 3.0f * unit,
 			control->width - 80.0f * unit, 6.0f * unit);
 		layout->row_count++;
@@ -751,6 +819,26 @@ static void draw_control(const struct overlay_layout *layout, int row, BOOL sele
 			COLOR_TEXT, text);
 		break;
 	}
+	case _kind_bind:
+	{
+		BOOL listening = overlay.listening == (int)item;
+		float size = 17.0f * unit;
+
+		draw_box(control, 6.0f * unit, listening ? color_alpha(COLOR_ACCENT, 0.25f) :
+			selected ? 0xFFFFFF1AUL : 0xFFFFFF0DUL);
+		if (listening)
+		{
+			strcpy(text, "Press a key");
+			draw_frame(control, 6.0f * unit, fmaxf(1.0f, unit), COLOR_ACCENT);
+		}
+		else
+		{
+			input_binding_name(input_binding((enum input_action)(item - _item_bind_first)), text, sizeof(text));
+		}
+		draw_text(control.x + (control.width - text_width(size, text)) / 2.0f, centered_baseline(middle, size), size,
+			listening ? COLOR_ACCENT : COLOR_TEXT, text);
+		break;
+	}
 	}
 }
 
@@ -800,10 +888,10 @@ static void draw_panel(const struct overlay_layout *layout)
 			draw_box(box, 6.0f * unit, color_alpha(COLOR_ACCENT, 0.12f));
 			draw_box(make_box(box.x, box.y + 9.0f * unit, 3.0f * unit, box.height - 18.0f * unit), 1.5f * unit,
 				COLOR_ACCENT);
-			help = items[item].help;
+			help = item_help(item);
 		}
 		draw_text(box.x + 20.0f * unit, centered_baseline(box.y + box.height / 2.0f, size), size,
-			selected ? COLOR_TEXT : 0xC8D2DEFFUL, items[item].label);
+			selected ? COLOR_TEXT : 0xC8D2DEFFUL, item_label(item));
 		draw_control(layout, row, selected);
 	}
 
@@ -820,10 +908,18 @@ static void draw_panel(const struct overlay_layout *layout)
 			{ "F10", "Close" },
 			{ "Q  E", "Tabs" },
 			{ "Arrows", "Change" },
+			{ "Del", "Default key" },
 		};
+		int count = (int)(sizeof(keys) / sizeof(keys[0])) - (overlay.tab == _tab_keybinds ? 0 : 1);
 		int index;
 
-		for (index = 0; index < (int)(sizeof(keys) / sizeof(keys[0])); index++)
+		if (overlay.listening >= 0)
+		{
+			x += draw_text(x, baseline, size, COLOR_TEXT, "Esc") + 7.0f * unit;
+			draw_text(x, baseline, size, COLOR_DIM, "Cancel");
+			count = 0;
+		}
+		for (index = 0; index < count; index++)
 		{
 			x += draw_text(x, baseline, size, COLOR_TEXT, keys[index][0]) + 7.0f * unit;
 			x += draw_text(x, baseline, size, COLOR_DIM, keys[index][1]) + 22.0f * unit;
@@ -1101,6 +1197,7 @@ static enum overlay_event_result overlay_open(void)
 	overlay.selected = 0;
 	overlay.quit_armed = FALSE;
 	overlay.dragging = -1;
+	overlay.listening = -1;
 	overlay.mouse_x = overlay.mouse_y = -1.0f;
 	overlay.hint_until = 0;
 	overlay_load();
@@ -1113,6 +1210,7 @@ static enum overlay_event_result overlay_close(void)
 {
 	overlay.open = FALSE;
 	overlay.dragging = -1;
+	overlay.listening = -1;
 	overlay.quit_armed = FALSE;
 	overlay_save();
 	return _overlay_event_closed;
@@ -1143,6 +1241,7 @@ static void select_tab(int tab)
 	overlay.tab = (enum overlay_tab)((tab + NUMBER_OF_TABS) % NUMBER_OF_TABS);
 	overlay.selected = 0;
 	overlay.dragging = -1;
+	overlay.listening = -1;
 	overlay.quit_armed = FALSE;
 }
 
@@ -1204,6 +1303,14 @@ static enum overlay_event_result overlay_mouse(const SDL_Event *event)
 		break;
 	case SDL_EVENT_MOUSE_BUTTON_DOWN:
 		pointer_pixels(event->button.x, event->button.y, &overlay.mouse_x, &overlay.mouse_y);
+		if (overlay.listening >= 0)
+		{
+			/* any button is the answer */
+			if (input_binding_allowed(INPUT_BINDING_MOUSE + event->button.button))
+				item_bind((enum overlay_item)overlay.listening, INPUT_BINDING_MOUSE + event->button.button);
+			overlay.listening = -1;
+			break;
+		}
 		if (event->button.button == SDL_BUTTON_RIGHT)
 			return overlay_close();
 		if (event->button.button != SDL_BUTTON_LEFT)
@@ -1283,6 +1390,8 @@ static void overlay_navigate(enum overlay_navigation navigation)
 	struct overlay_layout layout;
 	BOOL on_row;
 
+	if (overlay.listening >= 0)
+		return;
 	overlay_layout(&layout);
 	on_row = overlay.selected < layout.row_count;
 	switch (navigation)
@@ -1295,8 +1404,18 @@ static void overlay_navigate(enum overlay_navigation navigation)
 		break;
 	case _navigate_left:
 	case _navigate_right:
-		if (on_row)
+		if (on_row && items[layout.row_items[overlay.selected]].kind == _kind_bind)
+		{
+			/* to the other column */
+			int row = overlay.selected + (navigation == _navigate_left ? -1 : 1) * KEYBIND_ROWS_PER_COLUMN;
+
+			if (row >= 0 && row < layout.row_count)
+				select_row(row, layout.row_count);
+		}
+		else if (on_row)
+		{
 			item_step((enum overlay_item)layout.row_items[overlay.selected], navigation == _navigate_left ? -1 : 1);
+		}
 		break;
 	case _navigate_activate:
 		if (on_row)
@@ -1318,8 +1437,36 @@ static enum overlay_event_result overlay_key(const SDL_KeyboardEvent *key)
 {
 	if (!key->down)
 		return _overlay_event_consumed;
+	if (overlay.listening >= 0)
+	{
+		/* the next key is the answer; escape and F10 give up */
+		if (key->repeat)
+			return _overlay_event_consumed;
+		if (input_binding_allowed((int)key->scancode))
+			item_bind((enum overlay_item)overlay.listening, (int)key->scancode);
+		if (key->scancode == SDL_SCANCODE_ESCAPE || key->scancode == SDL_SCANCODE_F10 ||
+			input_binding_allowed((int)key->scancode))
+		{
+			overlay.listening = -1;
+			overlay_save();
+		}
+		return _overlay_event_consumed;
+	}
 	switch (key->scancode)
 	{
+	case SDL_SCANCODE_DELETE:
+		if (overlay.tab == _tab_keybinds)
+		{
+			struct overlay_layout layout;
+
+			overlay_layout(&layout);
+			if (overlay.selected < layout.row_count)
+			{
+				item_bind_default((enum overlay_item)layout.row_items[overlay.selected]);
+				overlay_save();
+			}
+		}
+		break;
 	case SDL_SCANCODE_ESCAPE:
 	case SDL_SCANCODE_F10:
 		if (!key->repeat)
@@ -1390,7 +1537,14 @@ static enum overlay_event_result overlay_gamepad(const SDL_Event *event)
 	{
 		/* (on letting go, so the game does not see B when it resumes) */
 		if (event->gbutton.button == SDL_GAMEPAD_BUTTON_EAST)
+		{
+			if (overlay.listening >= 0)
+			{
+				overlay.listening = -1;
+				return _overlay_event_consumed;
+			}
 			return overlay_close();
+		}
 		return _overlay_event_consumed;
 	}
 	switch (event->gbutton.button)

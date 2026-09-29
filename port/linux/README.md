@@ -136,13 +136,20 @@ you push it again.
 ## The settings overlay
 
 On Linux and Windows, F10 opens the settings overlay above the game. On a
-controller, push back and start together. The overlay has three tabs:
+controller, push back and start together. The overlay has four tabs:
 
 | Tab | Settings |
 | --- | --- |
 | Display | fullscreen, borderless or window, the size of the window, widescreen, the resolution, vertical sync, smooth motion, the frame counter |
 | Audio | the volume of everything, of the music, of the effects and of the dialogue |
 | Controls | the mouse sensitivity, the inverted mouse |
+| Keybinds | the key or mouse button for each action: move, jump, melee, action and reload, switch weapon, flashlight, switch grenade, throw grenade, fire, crouch, zoom |
+
+On the Keybinds tab, push enter, or click a key, then push the new key or
+mouse button. Escape stops the change. Delete gives the key its default.
+If another action has the key, the two actions change keys. F10, F11 and
+escape cannot be bound. The arrows, enter, backspace, F1, escape and the
+mouse wheel keep their functions.
 
 A change operates immediately, except smooth motion, which operates at the
 next start. The overlay writes each change to `config.toml`.
@@ -199,6 +206,7 @@ the setting for one start of the game. It has priority over the file.
 | `audio.music_volume`, `audio.effects_volume`, `audio.dialog_volume` | `1.0` | `HALO_MUSIC_VOLUME`, `HALO_EFFECTS_VOLUME`, `HALO_DIALOG_VOLUME` | The volume of the music, of the speech, and of all other sounds. The master volume multiplies them. |
 | `input.mouse_sensitivity` | `1.0` | `HALO_MOUSE_SENSITIVITY` | The multiplier for the mouse aim. |
 | `input.invert_mouse` | `false` | `HALO_MOUSE_INVERT=1` sets `true` | `true`: the vertical mouse aim is inverted. |
+| `input.key_move_forward`, `input.key_move_back`, `input.key_move_left`, `input.key_move_right`, `input.key_jump`, `input.key_melee`, `input.key_action`, `input.key_switch_weapon`, `input.key_flashlight`, `input.key_switch_grenade`, `input.key_throw_grenade`, `input.key_fire`, `input.key_crouch`, `input.key_zoom` | `"W"`, `"S"`, `"A"`, `"D"`, `"Space"`, `"F"`, `"E"`, `"Tab"`, `"Q"`, `"X"`, `"Right Mouse"`, `"Left Mouse"`, `"Left Ctrl"`, `"Middle Mouse"` | `HALO_KEY_MOVE_FORWARD`, `HALO_KEY_MOVE_BACK`, and so on | The key or mouse button for the action. A key has the name of the Keybinds tab (`"Space"`, `"Left Ctrl"`); a mouse button is `"Left Mouse"`, `"Middle Mouse"`, `"Right Mouse"`, `"Mouse 4"` or `"Mouse 5"`. Empty: none. |
 | `game.language` | `""` | `HALO_LANGUAGE` | The language of the menus: `ja`, `de`, `fr`, `es` or `it`. Empty: English. |
 | `game.unlock_all_levels` | `true` | `HALO_UNLOCK_ALL_LEVELS` | New profiles start with all campaign levels and difficulties open. `false`: only the first level, the rest opened by finishing the one before, as in the Xbox game. Profiles already made do not change. |
 | `paths.data` | `""` | `HALO_DATA_ROOT` | The data root. Refer to "Start the game". |
