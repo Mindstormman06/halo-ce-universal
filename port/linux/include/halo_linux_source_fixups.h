@@ -26,6 +26,9 @@ int halo_interpolation_enabled(void);
 /* whether the game's silent errors show on the screen as well as in
 debug.txt (port/linux/src/sdl_platform.c) */
 int halo_errors_on_screen(void);
+/* whether the game's console warnings (console_warning) show on the screen
+as well as in debug.txt (port/linux/src/sdl_platform.c) */
+int halo_warnings_on_screen(void);
 float game_time_get_tick_fraction(void);
 void render_interpolation_tick(void);
 void render_interpolation_frame_begin(void);

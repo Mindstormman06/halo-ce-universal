@@ -311,6 +311,15 @@ int halo_errors_on_screen(void)
 	return enabled;
 }
 
+int halo_warnings_on_screen(void)
+{
+	static int enabled = -1;
+
+	if (enabled < 0)
+		enabled = config_boolean("debug.warnings_on_screen");
+	return enabled;
+}
+
 #ifndef HALO_ANDROID
 /* whether the window opens fullscreen (display.fullscreen), never when it
 is hidden */

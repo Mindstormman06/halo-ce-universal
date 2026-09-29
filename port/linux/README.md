@@ -216,6 +216,7 @@ the setting for one start of the game. It has priority over the file.
 | `update.auto` | `true` | `HALO_UPDATE_AUTO` | `true`: at start-up, the game looks for a new version. Refer to "Updates". `false`: the game does not look. |
 | `debug.update_answer` | `""` | `HALO_UPDATE_ANSWER` | The answer to the update question, for automatic tests: `yes`, `no` or `never`. Empty: the game asks. |
 | `debug.errors_on_screen` | `false` | `HALO_ERRORS_ON_SCREEN` | `true`: the error messages of the game also show on the screen, as in the beta build. `false`: they go only to `debug.txt`. |
+| `debug.warnings_on_screen` | `false` | `HALO_WARNINGS_ON_SCREEN` | `true`: the red console warnings of the game (such as "event handler ... failed") also show on the screen, as in the beta build. `false`: they go only to `debug.txt`. |
 | `debug.exit_after` | `0.0` | `HALO_EXIT_AFTER` | The game stops after this number of seconds. `0`: never. |
 | `debug.screenshot_directory`, `debug.screenshot_every` | `""`, `0` | `HALO_SCREENSHOT_DIR`, `HALO_SCREENSHOT_EVERY` | The game writes each Nth frame to this folder as a BMP file. |
 | `debug.hidden_window`, `debug.null_renderer` | `false` | `HALO_HIDDEN_WINDOW`, `HALO_NULL_RENDERER` | `true`: no visible window, or no graphics. |

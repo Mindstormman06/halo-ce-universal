@@ -195,6 +195,18 @@ void console_warning(
 	vsprintf(buffer, format, arglist);
 	buffer[255] = '\0';
 
+#ifdef HALO_LINUX
+	/* the beta build shows its warnings on the screen; the native ports keep
+	them to debug.txt unless debug.warnings_on_screen
+	(port/linux/src/sdl_platform.c) */
+	if (!halo_warnings_on_screen())
+	{
+		csstrncat(buffer, "\r\n", NUMBEROF(buffer));
+		write_to_error_file(buffer, TRUE);
+		va_end(arglist);
+		return;
+	}
+#endif
 	terminal_printf(global_real_argb_red, "%s", buffer);
 	if (console_dump_to_file)
 	{
