@@ -85,6 +85,20 @@ enum
 	MAXIMUM_HARDWARE_CHARACTERS = 256,
 };
 
+#ifdef HALO_LINUX
+/* texels of transparency around each character in the cache: drawn larger
+than the Xbox's 480 lines, a character's edge pixels sample a little
+outside it, which drew a box of its neighbours' edges around every
+character (port/linux/src/d3d8_gl.c draws the screen at the display's
+resolution) */
+#define CHARACTER_CACHE_GUTTER 1
+#else
+#define CHARACTER_CACHE_GUTTER 0
+#endif
+/* a character's cell in the cache, gutter included */
+#define CHARACTER_CELL_WIDTH(character) ((character)->bitmap_width + 2 * CHARACTER_CACHE_GUTTER)
+#define CHARACTER_CELL_HEIGHT(character) ((character)->bitmap_height + 2 * CHARACTER_CACHE_GUTTER)
+
 enum
 {
 	_bitmap_format_a4r4g4b4 = 9,
@@ -602,8 +616,8 @@ hardware_character_cache_get_origin(
 	match_assert("c:\\halo\\SOURCE\\rasterizer\\rasterizer_text.c", 598, hardware_character_index>=0 && hardware_character_index<MAXIMUM_HARDWARE_CHARACTERS);
 	match_assert("c:\\halo\\SOURCE\\rasterizer\\rasterizer_text.c", 599, x0 && y0);
 
-	*x0 = hardware_character->x0;
-	*y0 = hardware_character->y0;
+	*x0 = hardware_character->x0 + CHARACTER_CACHE_GUTTER;
+	*y0 = hardware_character->y0 + CHARACTER_CACHE_GUTTER;
 
 	return;
 }
@@ -652,14 +666,14 @@ cache_hardware_format_character(
 
 		font_character->pad = magic_number;
 
-		if (font_character->bitmap_width + hardware_character_cache.x0 > HARDWARE_CHARACTER_CACHE_BITMAP_WIDTH)
+		if (CHARACTER_CELL_WIDTH(font_character) + hardware_character_cache.x0 > HARDWARE_CHARACTER_CACHE_BITMAP_WIDTH)
 		{
 			hardware_character_cache.x0 = 0;
 			hardware_character_cache.y0 += hardware_character_cache.maximum_character_height;
 			hardware_character_cache.maximum_character_height = 0;
 		}
 
-		if (font_character->bitmap_height + hardware_character_cache.y0 > HARDWARE_CHARACTER_CACHE_BITMAP_HEIGHT)
+		if (CHARACTER_CELL_HEIGHT(font_character) + hardware_character_cache.y0 > HARDWARE_CHARACTER_CACHE_BITMAP_HEIGHT)
 		{
 			hardware_character_cache.y0 = 0;
 			hardware_character_cache.x0 = 0;
@@ -678,10 +692,10 @@ cache_hardware_format_character(
 			}
 		}
 
-		if (font_character->bitmap_height > hardware_character_cache.maximum_character_height)
+		if (CHARACTER_CELL_HEIGHT(font_character) > hardware_character_cache.maximum_character_height)
 		{
 			y0 = hardware_character_cache.y0 + hardware_character_cache.maximum_character_height;
-			y1 = hardware_character_cache.y0 + font_character->bitmap_height;
+			y1 = hardware_character_cache.y0 + CHARACTER_CELL_HEIGHT(font_character);
 
 			for (;
 				hardware_character_cache.read_index != hardware_character_cache.write_index;
@@ -695,7 +709,7 @@ cache_hardware_format_character(
 				flush_hardware_character(hardware_character);
 			}
 
-			hardware_character_cache.maximum_character_height = font_character->bitmap_height;
+			hardware_character_cache.maximum_character_height = CHARACTER_CELL_HEIGHT(font_character);
 		}
 
 		next_write_index = (hardware_character_cache.write_index + 1) & (MAXIMUM_HARDWARE_CHARACTERS - 1);
@@ -714,6 +728,32 @@ cache_hardware_format_character(
 
 		source = (byte *)font->pixels.address + font_character->pixels_offset;
 
+#ifdef HALO_LINUX
+		/* the whole cell: the character, and the gutter around it clear */
+		for (y = 0; y < CHARACTER_CELL_HEIGHT(font_character); y++)
+		{
+			word *destination = (word *)bitmap_2d_address(
+				hardware_character_cache.bitmap,
+				hardware_character->x0,
+				(short)(hardware_character->y0 + y),
+				0);
+			boolean character_row = y >= CHARACTER_CACHE_GUTTER &&
+				y < CHARACTER_CACHE_GUTTER + font_character->bitmap_height;
+
+			for (x = 0; x < CHARACTER_CELL_WIDTH(font_character); x++)
+			{
+				if (character_row && x >= CHARACTER_CACHE_GUTTER &&
+					x < CHARACTER_CACHE_GUTTER + font_character->bitmap_width)
+				{
+					*destination++ = (word)((*source++ << 8) | 0x0FFF);
+				}
+				else
+				{
+					*destination++ = 0x0FFF;
+				}
+			}
+		}
+#else
 		for (y = 0; y < font_character->bitmap_height; y++)
 		{
 			word *destination = (word *)bitmap_2d_address(
@@ -725,10 +765,11 @@ cache_hardware_format_character(
 			for (x = 0; x < font_character->bitmap_width; x++)
 				*destination++ = (word)((*source++ << 8) | 0x0FFF);
 		}
+#endif
 
 		rasterizer_bitmap_changed(hardware_character_cache.bitmap);
 
-		hardware_character_cache.x0 += font_character->bitmap_width;
+		hardware_character_cache.x0 += CHARACTER_CELL_WIDTH(font_character);
 		hardware_character_cache.write_index = (hardware_character_cache.write_index + 1) & (MAXIMUM_HARDWARE_CHARACTERS - 1);
 	}
 
